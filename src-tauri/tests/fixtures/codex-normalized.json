@@ -1,0 +1,61 @@
+{
+  "provider": "codex",
+  "limits": [
+    {
+      "id": "rate_limit:primary_window",
+      "label": "Weekly",
+      "kind": "quota",
+      "used_fraction": 0.89,
+      "resets_at": 1789854129,
+      "window_seconds": 604800,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": null
+    },
+    {
+      "id": "additional:codex_bengalfox:primary_window",
+      "label": "GPT-5.3-Codex-Spark · 5-hour",
+      "kind": "quota",
+      "used_fraction": 0.0,
+      "resets_at": 1789344413,
+      "window_seconds": 18000,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": null
+    },
+    {
+      "id": "additional:codex_bengalfox:secondary_window",
+      "label": "GPT-5.3-Codex-Spark · Weekly",
+      "kind": "quota",
+      "used_fraction": 0.0,
+      "resets_at": 1789931213,
+      "window_seconds": 604800,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": null
+    },
+    {
+      "id": "credits",
+      "label": "Credits",
+      "kind": "credits",
+      "used_fraction": null,
+      "resets_at": null,
+      "window_seconds": null,
+      "provenance": "official",
+      "enabled": false,
+      "amount": {
+        "used": null,
+        "limit": null,
+        "balance": "0",
+        "currency": null
+      },
+      "detail": "No credits available."
+    }
+  ],
+  "plan": "prolite",
+  "fetched_at": 1789326413,
+  "warnings": []
+}

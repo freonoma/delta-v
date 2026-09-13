@@ -1,0 +1,75 @@
+{
+  "provider": "claude",
+  "limits": [
+    {
+      "id": "session",
+      "label": "5-hour",
+      "kind": "quota",
+      "used_fraction": 0.53,
+      "resets_at": 1789338600,
+      "window_seconds": 18000,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": null
+    },
+    {
+      "id": "weekly",
+      "label": "Weekly",
+      "kind": "quota",
+      "used_fraction": 0.3,
+      "resets_at": 1789905600,
+      "window_seconds": 604800,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": null
+    },
+    {
+      "id": "weekly:model-name:Fable",
+      "label": "Weekly · Fable",
+      "kind": "quota",
+      "used_fraction": 0.46,
+      "resets_at": 1789905600,
+      "window_seconds": 604800,
+      "provenance": "official",
+      "enabled": true,
+      "amount": null,
+      "detail": "This scope has no stable model identifier."
+    },
+    {
+      "id": "extra_usage",
+      "label": "Extra usage",
+      "kind": "spend",
+      "used_fraction": null,
+      "resets_at": null,
+      "window_seconds": null,
+      "provenance": "official",
+      "enabled": false,
+      "amount": {
+        "used": "0.00",
+        "limit": null,
+        "balance": null,
+        "currency": "USD"
+      },
+      "detail": "Extra usage is turned off."
+    },
+    {
+      "id": "nimbus_quill",
+      "label": "nimbus_quill",
+      "kind": "unknown",
+      "used_fraction": null,
+      "resets_at": null,
+      "window_seconds": null,
+      "provenance": "unknown",
+      "enabled": false,
+      "amount": null,
+      "detail": "The provider returned a field Delta-V cannot interpret yet."
+    }
+  ],
+  "plan": null,
+  "fetched_at": 1789326958,
+  "warnings": [
+    "nimbus_quill is not yet understood and is excluded from the menu bar."
+  ]
+}

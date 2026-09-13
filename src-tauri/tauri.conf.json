@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Delta-V",
+  "version": "0.1.0",
+  "identifier": "io.github.freonoma.delta-v",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Delta-V",
+        "width": 560,
+        "height": 360,
+        "visible": false,
+        "focus": false,
+        "decorations": false,
+        "transparent": true,
+        "incognito": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'",
+      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://127.0.0.1:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/128x128.png"]
+  }
+}

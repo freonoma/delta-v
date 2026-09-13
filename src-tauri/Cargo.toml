@@ -1,0 +1,26 @@
+[package]
+name = "delta-v"
+version = "0.1.0"
+description = "Claude Code and Codex usage in the macOS menu bar"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/freonoma/delta-v"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "c9ec2130422200f0863b23dfdad02b133a529b07" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["parsing", "formatting"] }
+toml = "0.9"
+tokio = { version = "1", features = ["time", "sync", "macros"] }
+sha2 = "0.10"
+thiserror = "2"
