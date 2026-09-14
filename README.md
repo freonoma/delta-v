@@ -39,6 +39,8 @@ Delta-V reads the sign-in saved by each provider's terminal app, also called a C
 
 Signing in on claude.ai or chatgpt.com alone does not set up the terminal app. Delta-V does not have its own login screen, and you do not need to copy a password or token into it. API-key, Claude Console, and third-party cloud-provider billing are not supported.
 
+Claude Desktop's Code tab has its own sign-in path. Delta-V currently reads the standalone Claude Code CLI credential, so usage working in the desktop app does not confirm that Delta-V's credential is still valid. Follow the Terminal steps above even if you normally use the Code tab.
+
 After signing in, click ΔV and select **Claude**, **Codex**, or **Both**. If Delta-V was already open, choose **Check now**. macOS may ask for Keychain access so the app can read the saved sign-in. See [Privacy](#privacy) for exactly what it reads.
 
 ## Using it
@@ -75,7 +77,7 @@ Delta-V waits for a new reading from the provider before showing a refill. A cou
 
 **Do Claude Code and Codex need to stay open?**
 
-No. Delta-V reads their saved sign-ins independently. If a sign-in expires, use `/login` inside Claude Code or `codex login` in Terminal, then choose Check now in Delta-V.
+No. Delta-V reads their saved sign-ins independently, but it relies on the CLIs to renew them. If Claude disconnects, open Terminal, run an up-to-date `claude`, then enter `/usage` at its prompt. That command can renew an expired access token without sending a model prompt. Check for a warning about last-known usage: Claude Code can display cached figures when the request fails. Use `/login` if it reports a sign-in failure, then choose **Check now** in Delta-V. For Codex, use `codex login` in Terminal if its sign-in needs renewing.
 
 **Does it start when I log in to my Mac?**
 

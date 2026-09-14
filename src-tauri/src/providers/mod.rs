@@ -21,8 +21,12 @@ const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 pub enum ProviderError {
     #[error(transparent)]
     Credential(#[from] credentials::CredentialError),
-    #[error("Your CLI sign-in needs refreshing. Sign in through the CLI, then refresh here.")]
+    #[error(
+        "The saved CLI sign-in was rejected. Check your sign-in in the CLI, then refresh here."
+    )]
     Authentication,
+    #[error("The usage service denied access (403).")]
+    AccessDenied { retry_at: Option<i64> },
     #[error("Could not reach the usage service. The last reading may be out of date.")]
     Network,
     #[error("The usage service asked us to wait before checking again.")]
@@ -36,7 +40,9 @@ pub enum ProviderError {
 impl ProviderError {
     pub fn retry_at(&self) -> Option<i64> {
         match self {
-            Self::RateLimited { retry_at } | Self::Service { retry_at, .. } => *retry_at,
+            Self::AccessDenied { retry_at }
+            | Self::RateLimited { retry_at }
+            | Self::Service { retry_at, .. } => *retry_at,
             _ => None,
         }
     }
@@ -117,6 +123,21 @@ fn retry_after(headers: &HeaderMap) -> Option<i64> {
         .and_then(|value| parse_retry_after(value, now()))
 }
 
+fn response_error(status: StatusCode, retry_at: Option<i64>) -> Option<ProviderError> {
+    if status.is_success() {
+        return None;
+    }
+    Some(match status {
+        StatusCode::UNAUTHORIZED => ProviderError::Authentication,
+        StatusCode::FORBIDDEN => ProviderError::AccessDenied { retry_at },
+        StatusCode::TOO_MANY_REQUESTS => ProviderError::RateLimited { retry_at },
+        _ => ProviderError::Service {
+            status: status.as_u16(),
+            retry_at,
+        },
+    })
+}
+
 async fn fetch_json(id: ProviderId, client: &Client) -> Result<Value, ProviderError> {
     let mut credential = credentials::load(id).await?;
     for attempt in 0..2 {
@@ -144,19 +165,8 @@ async fn fetch_json(id: ProviderId, client: &Client) -> Result<Value, ProviderEr
             }
             return Err(ProviderError::Authentication);
         }
-        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            return Err(ProviderError::Authentication);
-        }
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ProviderError::RateLimited {
-                retry_at: retry_after(response.headers()),
-            });
-        }
-        if !status.is_success() {
-            return Err(ProviderError::Service {
-                status: status.as_u16(),
-                retry_at: retry_after(response.headers()),
-            });
+        if let Some(error) = response_error(status, retry_after(response.headers())) {
+            return Err(error);
         }
         if response
             .content_length()
@@ -248,5 +258,17 @@ mod tests {
             !ProviderError::Credential(credentials::CredentialError::CodexStorage)
                 .requires_sign_in()
         );
+    }
+
+    #[test]
+    fn forbidden_usage_does_not_request_login_and_preserves_server_cooldown() {
+        let forbidden = response_error(StatusCode::FORBIDDEN, Some(5000)).unwrap();
+        assert!(matches!(forbidden, ProviderError::AccessDenied { .. }));
+        assert!(!forbidden.requires_sign_in());
+        assert_eq!(forbidden.retry_at(), Some(5000));
+
+        let unauthorized = response_error(StatusCode::UNAUTHORIZED, None).unwrap();
+        assert!(unauthorized.requires_sign_in());
+        assert!(response_error(StatusCode::OK, None).is_none());
     }
 }

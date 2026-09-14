@@ -39,6 +39,7 @@ struct Schedule {
     last_started: i64,
     failures: u32,
     cadence: i64,
+    waiting_for_sign_in: bool,
 }
 
 struct Inner {
@@ -116,13 +117,27 @@ impl Runtime {
 
 pub fn request_refresh(app: &AppHandle) {
     let runtime = app.state::<Runtime>();
-    if let Ok(mut inner) = runtime.inner.lock() {
-        for schedule in &mut inner.schedules {
-            // Manual clicks cannot bypass a provider's cooldown or pile up requests.
-            schedule.next_due = schedule.last_started.saturating_add(10);
-        }
+    let view = if let Ok(mut inner) = runtime.inner.lock() {
+        queue_manual_refresh(&mut inner);
+        Some(inner.view.clone())
+    } else {
+        None
+    };
+    if let Some(view) = view {
+        publish(app, &view);
     }
     runtime.wake.notify_one();
+}
+
+fn queue_manual_refresh(inner: &mut Inner) {
+    for (state, schedule) in inner.view.providers.iter_mut().zip(&mut inner.schedules) {
+        schedule.next_due = schedule.last_started.saturating_add(10);
+        if schedule.waiting_for_sign_in {
+            // A new CLI sign-in can recover immediately; server cooldowns still apply.
+            schedule.blocked_until = 0;
+            state.next_retry_at = Some(schedule.next_due);
+        }
+    }
 }
 
 pub fn start(app: AppHandle) {
@@ -262,6 +277,7 @@ fn apply_result(
             schedule.next_due = next_refresh(&snapshot, cadence, now);
             schedule.failures = 0;
             schedule.blocked_until = 0;
+            schedule.waiting_for_sign_in = false;
             state.error = None;
             state.next_retry_at = None;
             state.snapshot = Some(snapshot);
@@ -269,14 +285,15 @@ fn apply_result(
         }
         Err(error) => {
             schedule.failures = schedule.failures.saturating_add(1);
-            let delay = if error.requires_sign_in() {
+            schedule.waiting_for_sign_in = error.requires_sign_in();
+            let delay = if schedule.waiting_for_sign_in {
                 300
             } else {
                 backoff(schedule.failures, now)
             };
             schedule.blocked_until = error.retry_at().unwrap_or(0).max(now + delay);
             schedule.next_due = schedule.blocked_until;
-            if error.requires_sign_in() {
+            if schedule.waiting_for_sign_in {
                 state.snapshot = None;
             }
             state.error = Some(error.to_string());
@@ -520,6 +537,93 @@ mod tests {
         assert!(inner.view.providers[0].stale);
         apply_result(&mut inner, 0, 60, 151, Err(ProviderError::Authentication));
         assert!(inner.view.providers[0].snapshot.is_none());
+    }
+
+    #[test]
+    fn manual_check_can_recover_after_sign_in_without_waiting_five_minutes() {
+        let mut inner = inner();
+        inner.schedules[0].last_started = 100;
+        apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
+        assert_eq!(inner.schedules[0].blocked_until, 401);
+        assert!(inner.schedules[0].waiting_for_sign_in);
+
+        queue_manual_refresh(&mut inner);
+        let schedule = &inner.schedules[0];
+        assert_eq!(schedule.next_due.max(schedule.blocked_until), 110);
+        assert_eq!(inner.view.providers[0].next_retry_at, Some(110));
+        assert!(inner.view.providers[0].snapshot.is_none());
+    }
+
+    #[test]
+    fn successful_auth_recovery_clears_failure_state_and_deadlines() {
+        let mut inner = inner();
+        let mut snapshot = inner.view.providers[0].snapshot.clone().unwrap();
+        snapshot.fetched_at = 150;
+        apply_result(&mut inner, 0, 60, 110, Err(ProviderError::Authentication));
+        apply_result(&mut inner, 0, 60, 120, Err(ProviderError::Authentication));
+        assert_eq!(inner.schedules[0].failures, 2);
+
+        apply_result(&mut inner, 0, 60, 150, Ok(snapshot));
+        let schedule = &inner.schedules[0];
+        let state = &inner.view.providers[0];
+        assert!(!schedule.waiting_for_sign_in);
+        assert_eq!(schedule.failures, 0);
+        assert_eq!(schedule.blocked_until, 0);
+        assert_eq!(schedule.next_due, 201);
+        assert!(state.error.is_none());
+        assert!(state.next_retry_at.is_none());
+        assert!(!state.stale);
+        assert!(state.snapshot.is_some());
+    }
+
+    #[test]
+    fn manual_checks_preserve_server_cooldowns_and_other_error_backoff() {
+        for error in [
+            ProviderError::RateLimited {
+                retry_at: Some(5000),
+            },
+            ProviderError::AccessDenied {
+                retry_at: Some(5000),
+            },
+            ProviderError::Service {
+                status: 503,
+                retry_at: Some(5000),
+            },
+            ProviderError::Network,
+        ] {
+            let mut inner = inner();
+            inner.schedules[0].last_started = 100;
+            apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
+            apply_result(&mut inner, 0, 60, 102, Err(error));
+            let blocked_until = inner.schedules[0].blocked_until;
+            assert!(blocked_until > 110);
+            assert!(!inner.schedules[0].waiting_for_sign_in);
+
+            queue_manual_refresh(&mut inner);
+            let schedule = &inner.schedules[0];
+            assert_eq!(schedule.blocked_until, blocked_until);
+            assert_eq!(schedule.next_due.max(schedule.blocked_until), blocked_until);
+            assert_eq!(inner.view.providers[0].next_retry_at, Some(blocked_until));
+        }
+    }
+
+    #[test]
+    fn repeated_manual_checks_keep_ten_second_spacing_and_inflight_state() {
+        let mut inner = inner();
+        inner.schedules[0].last_started = 100;
+        apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
+        for _ in 0..3 {
+            queue_manual_refresh(&mut inner);
+            assert_eq!(inner.schedules[0].next_due, 110);
+        }
+
+        inner.schedules[0].last_started = 110;
+        inner.view.providers[0].refreshing = true;
+        for _ in 0..3 {
+            queue_manual_refresh(&mut inner);
+            assert_eq!(inner.schedules[0].next_due, 120);
+            assert!(inner.view.providers[0].refreshing);
+        }
     }
 
     #[test]
