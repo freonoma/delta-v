@@ -8,7 +8,7 @@ The name comes from spaceflight: a finite budget until the next refill.
 
 ## Install
 
-Delta-V is still in development. There is no downloadable app or Homebrew package yet. For now, you need to build it from source on a Mac.
+Delta-V is still in development. There is no downloadable release or Homebrew package yet. For now, build the app from source on a Mac running macOS 13.3 or newer.
 
 You need [Node.js](https://nodejs.org/en/download) 22.12 or newer, [Rust](https://rust-lang.org/tools/install/), and the [Xcode command line tools](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools) installed.
 
@@ -18,13 +18,15 @@ You need [Node.js](https://nodejs.org/en/download) 22.12 or newer, [Rust](https:
 
 ```sh
 npm ci
-npm run tauri -- build -- --locked
-./src-tauri/target/release/delta-v
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build -- --locked
+open src-tauri/target/release/bundle/macos
 ```
 
-The first two commands build the app. The last command opens Delta-V. Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock.
+The first two commands build `Delta-V.app` for your Mac. The last command opens its folder in Finder. Quit any running copy of Delta-V, drag `Delta-V.app` into **Applications**, then double-click it there.
 
-Keep that Terminal window open while using this source build. To quit, click ΔV, then **Quit**. To open it again, run the last command from the same folder; you only need to rebuild after changing or updating the source.
+Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock. You can close Terminal once it is running. To quit, click ΔV, then **Quit**. Open it again from Applications.
+
+The `APPLE_SIGNING_IDENTITY=-` setting gives this local build an ad-hoc signature, which does not require an Apple Developer account. A Developer ID-signed and notarized download is still planned. To update a source build, rebuild it, quit the installed copy, and replace it in Applications.
 
 ## Connect your accounts
 
@@ -122,6 +124,8 @@ Custom CLI directories change the credential paths above:
 
 - Claude uses `CLAUDE_SECURESTORAGE_CONFIG_DIR` when set, then `CLAUDE_CONFIG_DIR`. An empty or absent effective override selects `~/.claude`. For a nonempty override, the Keychain service becomes `Claude Code-credentials-<hash>`. The suffix is the first eight SHA-256 characters of the override after Unicode normalization.
 - Codex uses `CODEX_HOME`, or `~/.codex` by default. Its Keychain account suffix is the first sixteen SHA-256 characters of that directory's canonical path. Codex's storage setting determines which store is read. An access denial does not cause a fallback to another store.
+
+Finder does not load environment variables from shell startup files. If you use a custom CLI directory, pass its absolute path when launching Delta-V from Terminal. For example, `CODEX_HOME="/absolute/path/to/codex" /Applications/Delta-V.app/Contents/MacOS/delta-v`. Quit any running copy first. The default directories work when opening the app from Finder.
 
 Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. It does not write a usage history or a separate copy of your credentials.
 

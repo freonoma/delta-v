@@ -33,7 +33,11 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/128x128.png"]
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns", "icons/128x128.png"],
+    "macOS": {
+      "minimumSystemVersion": "13.3"
+    }
   }
 }
