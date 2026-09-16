@@ -1,24 +1,41 @@
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::{
+    credentials,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
     platform::{self, Activity},
-    providers::{self, ClaudeProvider, CodexProvider, Provider, ProviderError},
+    providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
     settings::{self, PercentageMode, Settings},
     tray,
 };
 
 const PROVIDERS: [ProviderId; 2] = [ProviderId::Claude, ProviderId::Codex];
 
+#[derive(Clone, Copy, PartialEq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStage {
+    Renewing,
+    SigningIn,
+    Checking,
+    Cancelling,
+}
+
 #[derive(Clone, PartialEq, Serialize)]
 pub struct ProviderState {
     pub id: ProviderId,
     pub snapshot: Option<ProviderSnapshot>,
-    pub error: Option<String>,
+    pub error: Option<Issue>,
+    pub recovery: Option<RecoveryStage>,
     pub refreshing: bool,
     pub stale: bool,
     pub next_retry_at: Option<i64>,
@@ -34,12 +51,17 @@ pub struct AppState {
 
 #[derive(Default)]
 struct Schedule {
+    generation: u64,
+    poll_generation: Option<u64>,
     next_due: i64,
     blocked_until: i64,
     last_started: i64,
     failures: u32,
     cadence: i64,
     waiting_for_sign_in: bool,
+    cooldown_issue: Option<Issue>,
+    recovery_cancel: Option<Arc<AtomicBool>>,
+    last_recovery_started: Option<i64>,
 }
 
 struct Inner {
@@ -51,6 +73,7 @@ pub struct Runtime {
     inner: Mutex<Inner>,
     client: reqwest::Client,
     wake: Notify,
+    quitting: AtomicBool,
 }
 
 impl Runtime {
@@ -69,6 +92,7 @@ impl Runtime {
                             id,
                             snapshot: None,
                             error: None,
+                            recovery: None,
                             refreshing: false,
                             stale: true,
                             next_retry_at: None,
@@ -81,6 +105,7 @@ impl Runtime {
             }),
             client: providers::client()?,
             wake: Notify::new(),
+            quitting: AtomicBool::new(false),
         })
     }
 
@@ -91,8 +116,11 @@ impl Runtime {
             .map_err(|_| "Could not read the app state.".to_owned())
     }
 
-    pub fn save(&self, settings: Settings) -> Result<AppState, String> {
+    pub fn save(&self, mut settings: Settings) -> Result<AppState, String> {
         let mut inner = self.inner.lock().map_err(|_| "Could not save settings.")?;
+        // Account actions take effect immediately, independently of an open settings draft.
+        settings.claude_enabled = inner.view.settings.claude_enabled;
+        settings.codex_enabled = inner.view.settings.codex_enabled;
         settings::save(&settings).map_err(|error| error.to_string())?;
         for (index, provider) in PROVIDERS.into_iter().enumerate() {
             if inner.view.settings.providers.includes(provider)
@@ -117,20 +145,23 @@ impl Runtime {
 
 pub fn request_refresh(app: &AppHandle) {
     let runtime = app.state::<Runtime>();
-    let view = if let Ok(mut inner) = runtime.inner.lock() {
+    let changed = if let Ok(mut inner) = runtime.inner.lock() {
         queue_manual_refresh(&mut inner);
-        Some(inner.view.clone())
+        true
     } else {
-        None
+        false
     };
-    if let Some(view) = view {
-        publish(app, &view);
+    if changed {
+        publish(app);
     }
     runtime.wake.notify_one();
 }
 
 fn queue_manual_refresh(inner: &mut Inner) {
     for (state, schedule) in inner.view.providers.iter_mut().zip(&mut inner.schedules) {
+        if state.recovery.is_some() || !inner.view.settings.is_enabled(state.id) {
+            continue;
+        }
         schedule.next_due = schedule.last_started.saturating_add(10);
         if schedule.waiting_for_sign_in {
             // A new CLI sign-in can recover immediately; server cooldowns still apply.
@@ -138,6 +169,445 @@ fn queue_manual_refresh(inner: &mut Inner) {
             state.next_retry_at = Some(schedule.next_due);
         }
     }
+}
+
+pub fn set_provider_enabled(
+    app: &AppHandle,
+    provider: ProviderId,
+    enabled: bool,
+) -> Result<(), String> {
+    let runtime = app.state::<Runtime>();
+    if runtime.quitting.load(Ordering::Relaxed) {
+        return Err("Delta-V is quitting.".to_owned());
+    }
+    {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not update this connection.")?;
+        let index = provider_index(provider);
+        if enabled && inner.schedules[index].recovery_cancel.is_some() {
+            return Err("Wait for the current sign-in action to finish.".to_owned());
+        }
+        if inner.view.settings.is_enabled(provider) == enabled {
+            return Ok(());
+        }
+        let mut settings = inner.view.settings.clone();
+        settings.set_enabled(provider, enabled);
+        settings::save(&settings).map_err(|error| error.to_string())?;
+        change_connection(&mut inner, index, enabled, providers::now());
+        inner.view.settings_error = None;
+    }
+    publish(app);
+    runtime.wake.notify_one();
+    Ok(())
+}
+
+fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
+    let state = &mut inner.view.providers[index];
+    let schedule = &mut inner.schedules[index];
+    inner.view.settings.set_enabled(state.id, enabled);
+    schedule.generation = schedule.generation.wrapping_add(1);
+    state.snapshot = None;
+    state.error = None;
+    state.stale = true;
+    state.next_retry_at = None;
+    state.refreshing = enabled && schedule.poll_generation.is_some();
+    if let Some(cancel) = &schedule.recovery_cancel {
+        cancel.store(true, Ordering::Relaxed);
+        state.recovery = Some(RecoveryStage::Cancelling);
+    }
+    if enabled {
+        schedule.next_due = schedule.last_started.saturating_add(10);
+        if schedule.waiting_for_sign_in {
+            schedule.blocked_until = 0;
+        }
+        if schedule.blocked_until > now {
+            state.next_retry_at = Some(schedule.blocked_until);
+            state.error = schedule.cooldown_issue.clone();
+        }
+    }
+}
+
+fn provider_index(provider: ProviderId) -> usize {
+    match provider {
+        ProviderId::Claude => 0,
+        ProviderId::Codex => 1,
+    }
+}
+
+fn begin_recovery(
+    inner: &mut Inner,
+    index: usize,
+    action: platform::auth::Action,
+    cancel: Arc<AtomicBool>,
+    now: i64,
+) -> Result<(), String> {
+    let state = &mut inner.view.providers[index];
+    let schedule = &mut inner.schedules[index];
+    if inner.view.paused {
+        return Err("Unlock your Mac before reconnecting.".to_owned());
+    }
+    if !inner.view.settings.is_enabled(state.id) {
+        return Err("Connect this provider in Settings before signing in.".to_owned());
+    }
+    if schedule.poll_generation.is_some() || state.refreshing || state.recovery.is_some() {
+        return Err("A check or sign-in is already in progress.".to_owned());
+    }
+    let eligible = state
+        .error
+        .as_ref()
+        .map_or(action == platform::auth::Action::SignIn, |error| {
+            matches!(
+                error.kind,
+                IssueKind::SignIn
+                    | IssueKind::Authentication
+                    | IssueKind::Recovery
+                    | IssueKind::ClientMissing
+            )
+        });
+    if !eligible {
+        return Err(
+            "This problem does not require a new sign-in. Check the usage message first."
+                .to_owned(),
+        );
+    }
+    if !schedule.waiting_for_sign_in && now < schedule.blocked_until {
+        return Err(
+            "The provider asked us to wait. Reconnect after the countdown ends.".to_owned(),
+        );
+    }
+    if let Some(previous) = schedule.last_recovery_started
+        && now < previous.saturating_add(30)
+    {
+        return Err("Wait a few seconds before trying to reconnect again.".to_owned());
+    }
+    schedule.last_recovery_started = Some(now);
+    schedule.recovery_cancel = Some(cancel);
+    state.recovery = Some(match action {
+        platform::auth::Action::Renew => RecoveryStage::Checking,
+        platform::auth::Action::SignIn => RecoveryStage::SigningIn,
+    });
+    // Sign-in can select another account, so the previous account's reading must disappear.
+    state.snapshot = None;
+    state.error = None;
+    state.next_retry_at = None;
+    state.stale = true;
+    Ok(())
+}
+
+pub fn request_reconnect(
+    app: &AppHandle,
+    provider: ProviderId,
+    action: platform::auth::Action,
+) -> Result<(), String> {
+    let runtime = app.state::<Runtime>();
+    if runtime.quitting.load(Ordering::Relaxed) {
+        return Err("Delta-V is quitting.".to_owned());
+    }
+    let index = provider_index(provider);
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not start account recovery.")?;
+        begin_recovery(&mut inner, index, action, cancel.clone(), providers::now())?;
+    };
+    publish(app);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        recover(&app, provider, action, cancel).await;
+    });
+    Ok(())
+}
+
+pub fn cancel_reconnect(app: &AppHandle, provider: ProviderId) -> Result<(), String> {
+    let runtime = app.state::<Runtime>();
+    let index = provider_index(provider);
+    {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not cancel account recovery.")?;
+        if let Some(cancel) = &inner.schedules[index].recovery_cancel {
+            cancel.store(true, Ordering::Relaxed);
+            inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
+        }
+    };
+    publish(app);
+    Ok(())
+}
+
+fn recovery_stage(app: &AppHandle, index: usize, stage: RecoveryStage, cancel: &AtomicBool) {
+    let runtime = app.state::<Runtime>();
+    if let Ok(mut inner) = runtime.inner.lock() {
+        inner.view.providers[index].recovery = Some(if cancel.load(Ordering::Relaxed) {
+            RecoveryStage::Cancelling
+        } else {
+            stage
+        });
+        drop(inner);
+        publish(app);
+    }
+}
+
+async fn recovery_fetch(
+    app: &AppHandle,
+    index: usize,
+    provider: ProviderId,
+    cancel: &AtomicBool,
+) -> Option<Result<ProviderSnapshot, ProviderError>> {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        let runtime = app.state::<Runtime>();
+        let ready = {
+            let mut inner = runtime.inner.lock().ok()?;
+            if inner.view.paused || !inner.view.settings.is_enabled(provider) {
+                cancel.store(true, Ordering::Relaxed);
+                return None;
+            }
+            let schedule = &mut inner.schedules[index];
+            let permitted =
+                schedule
+                    .last_started
+                    .saturating_add(10)
+                    .max(if schedule.waiting_for_sign_in {
+                        0
+                    } else {
+                        schedule.blocked_until
+                    });
+            if providers::now() >= permitted {
+                schedule.last_started = providers::now();
+                true
+            } else {
+                false
+            }
+        };
+        if ready {
+            return Some(fetch_provider(provider, &runtime.client).await);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn recover(
+    app: &AppHandle,
+    provider: ProviderId,
+    action: platform::auth::Action,
+    cancel: Arc<AtomicBool>,
+) {
+    let index = provider_index(provider);
+    if matches!(action, platform::auth::Action::Renew) {
+        // Another client may have renewed the sign-in since the failed poll.
+        match recovery_fetch(app, index, provider, &cancel).await {
+            Some(Err(ProviderError::Authentication)) => {}
+            Some(result) => {
+                finish_recovery(app, index, &cancel, Some(result), None);
+                return;
+            }
+            None => {
+                finish_recovery(app, index, &cancel, None, None);
+                return;
+            }
+        }
+    }
+    let before = match credentials::load(provider).await {
+        Ok(credential) => Some(credential),
+        Err(error) if action == platform::auth::Action::SignIn && error.requires_sign_in() => None,
+        Err(error) => {
+            finish_recovery(
+                app,
+                index,
+                &cancel,
+                Some(Err(ProviderError::Credential(error))),
+                None,
+            );
+            return;
+        }
+    };
+    if cancel.load(Ordering::Relaxed) {
+        finish_recovery(app, index, &cancel, None, None);
+        return;
+    }
+    recovery_stage(
+        app,
+        index,
+        match action {
+            platform::auth::Action::Renew => RecoveryStage::Renewing,
+            platform::auth::Action::SignIn => RecoveryStage::SigningIn,
+        },
+        &cancel,
+    );
+    let helper_cancel = cancel.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        platform::auth::recover(provider, action, helper_cancel)
+    })
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(_) => Err(platform::auth::Error::Failed),
+    };
+    if let Err(error) = result {
+        let kind = match error {
+            platform::auth::Error::ClientMissing(_) => IssueKind::ClientMissing,
+            platform::auth::Error::UnsupportedAccount => IssueKind::SignIn,
+            platform::auth::Error::ManualSignInRequired => IssueKind::Configuration,
+            _ => IssueKind::Recovery,
+        };
+        finish_recovery(
+            app,
+            index,
+            &cancel,
+            None,
+            Some(Issue {
+                kind,
+                message: error.to_string(),
+            }),
+        );
+        return;
+    }
+    if cancel.load(Ordering::Relaxed) {
+        finish_recovery(app, index, &cancel, None, None);
+        return;
+    }
+    let after = match credentials::load(provider).await {
+        Ok(credential) => credential,
+        Err(error) => {
+            finish_recovery(
+                app,
+                index,
+                &cancel,
+                Some(Err(ProviderError::Credential(error))),
+                None,
+            );
+            return;
+        }
+    };
+    if matches!(action, platform::auth::Action::Renew) && before.as_ref() == Some(&after) {
+        finish_recovery(app, index, &cancel, None, Some(Issue {
+            kind: IssueKind::Recovery,
+            message: "The provider did not update the saved sign-in. Choose Sign in again to reconnect.".to_owned(),
+        }));
+        return;
+    }
+    recovery_stage(app, index, RecoveryStage::Checking, &cancel);
+    let result = recovery_fetch(app, index, provider, &cancel).await;
+    finish_recovery(app, index, &cancel, result, None);
+}
+
+fn finish_recovery(
+    app: &AppHandle,
+    index: usize,
+    cancel: &AtomicBool,
+    result: Option<Result<ProviderSnapshot, ProviderError>>,
+    issue: Option<Issue>,
+) {
+    let runtime = app.state::<Runtime>();
+    {
+        let Ok(mut inner) = runtime.inner.lock() else {
+            return;
+        };
+        complete_recovery(
+            &mut inner,
+            index,
+            cancel.load(Ordering::Relaxed),
+            result,
+            issue,
+            providers::now(),
+        );
+    };
+    publish(app);
+    runtime.wake.notify_one();
+}
+
+fn complete_recovery(
+    inner: &mut Inner,
+    index: usize,
+    cancelled: bool,
+    result: Option<Result<ProviderSnapshot, ProviderError>>,
+    issue: Option<Issue>,
+    now: i64,
+) {
+    inner.schedules[index].recovery_cancel = None;
+    inner.view.providers[index].recovery = None;
+    if !inner
+        .view
+        .settings
+        .is_enabled(inner.view.providers[index].id)
+    {
+        if let Some(Err(error)) = &result {
+            preserve_service_wait(&mut inner.schedules[index], error, now);
+        }
+        return;
+    }
+    if let Some(result) = result
+        && (!cancelled || result.is_err())
+    {
+        let cadence = inner.schedules[index]
+            .cadence
+            .max(inner.view.settings.refresh_seconds as i64);
+        apply_result(inner, index, cadence, now, result);
+        return;
+    }
+    let schedule = &mut inner.schedules[index];
+    // This wait is local. It must not replace an outstanding service cooldown.
+    schedule.next_due = schedule.blocked_until.max(now.saturating_add(300));
+    schedule.waiting_for_sign_in = schedule.waiting_for_sign_in || schedule.blocked_until <= now;
+    let state = &mut inner.view.providers[index];
+    state.error = Some(if cancelled {
+        Issue { kind: IssueKind::Recovery, message: "Reconnection cancelled. Any sign-in already completed stays saved in the provider's app.".to_owned() }
+    } else {
+        issue.unwrap_or(Issue {
+            kind: IssueKind::Recovery,
+            message:
+                "Could not finish reconnecting. Try again or sign in through the provider's app."
+                    .to_owned(),
+        })
+    });
+    state.snapshot = None;
+    state.stale = true;
+    state.next_retry_at = Some(schedule.next_due);
+}
+
+pub fn request_quit(app: &AppHandle) {
+    let runtime = app.state::<Runtime>();
+    if runtime.quitting.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut inner) = runtime.inner.lock() {
+        for index in 0..PROVIDERS.len() {
+            if let Some(cancel) = &inner.schedules[index].recovery_cancel {
+                cancel.store(true, Ordering::Relaxed);
+                inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
+            }
+        }
+        drop(inner);
+        publish(app);
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let active = app
+                .state::<Runtime>()
+                .inner
+                .lock()
+                .map(|inner| {
+                    inner
+                        .schedules
+                        .iter()
+                        .any(|schedule| schedule.recovery_cancel.is_some())
+                })
+                .unwrap_or(false);
+            if !active {
+                app.exit(0);
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
 }
 
 pub fn start(app: AppHandle) {
@@ -164,8 +634,11 @@ fn interval(settings: &Settings, idle_seconds: Option<f64>) -> i64 {
 
 fn tick(app: &AppHandle, activity: Activity, now: i64) {
     let runtime = app.state::<Runtime>();
+    if runtime.quitting.load(Ordering::Relaxed) {
+        return;
+    }
     let mut pending = Vec::new();
-    let view = {
+    let changed = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
@@ -174,7 +647,15 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
         inner.view.paused = activity.locked != Some(false);
         let cadence = interval(&inner.view.settings, activity.idle_seconds);
         for (index, provider) in PROVIDERS.into_iter().enumerate() {
-            if !inner.view.settings.providers.includes(provider) {
+            if (inner.view.paused || !inner.view.settings.is_enabled(provider))
+                && let Some(cancel) = &inner.schedules[index].recovery_cancel
+            {
+                cancel.store(true, Ordering::Relaxed);
+                inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
+            }
+            if !inner.view.settings.providers.includes(provider)
+                || !inner.view.settings.is_enabled(provider)
+            {
                 continue;
             }
             if was_paused && !inner.view.paused {
@@ -190,7 +671,11 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
                     inner.schedules[index].next_due = next_refresh(snapshot, cadence, now);
                 }
             }
-            if inner.view.paused || inner.view.providers[index].refreshing {
+            if inner.view.paused
+                || inner.schedules[index].poll_generation.is_some()
+                || inner.view.providers[index].refreshing
+                || inner.view.providers[index].recovery.is_some()
+            {
                 continue;
             }
             let schedule = &mut inner.schedules[index];
@@ -198,24 +683,54 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
                 continue;
             }
             schedule.last_started = now;
+            let generation = schedule.generation;
+            schedule.poll_generation = Some(generation);
             inner.view.providers[index].refreshing = true;
-            pending.push((index, provider));
+            pending.push((index, provider, generation));
         }
-        (before != inner.view).then(|| inner.view.clone())
+        before != inner.view
     };
-    if let Some(view) = view {
-        publish(app, &view);
+    if changed {
+        publish(app);
     }
-    for (index, provider) in pending {
+    for (index, provider, generation) in pending {
         let app = app.clone();
         let client = runtime.client.clone();
         tauri::async_runtime::spawn(async move {
-            let result = match provider {
-                ProviderId::Claude => ClaudeProvider { client: &client }.fetch().await,
-                ProviderId::Codex => CodexProvider { client: &client }.fetch().await,
+            let current = {
+                let runtime = app.state::<Runtime>();
+                let Ok(mut inner) = runtime.inner.lock() else {
+                    return;
+                };
+                if inner.schedules[index].generation == generation
+                    && inner.view.settings.is_enabled(provider)
+                {
+                    true
+                } else {
+                    if inner.schedules[index].poll_generation == Some(generation) {
+                        inner.schedules[index].poll_generation = None;
+                        inner.view.providers[index].refreshing = false;
+                    }
+                    false
+                }
             };
-            finish(&app, index, result);
+            if !current {
+                publish(&app);
+                return;
+            }
+            let result = fetch_provider(provider, &client).await;
+            finish(&app, index, generation, result);
         });
+    }
+}
+
+async fn fetch_provider(
+    provider: ProviderId,
+    client: &reqwest::Client,
+) -> Result<ProviderSnapshot, ProviderError> {
+    match provider {
+        ProviderId::Claude => ClaudeProvider { client }.fetch().await,
+        ProviderId::Codex => CodexProvider { client }.fetch().await,
     }
 }
 
@@ -248,18 +763,76 @@ fn backoff(failures: u32, now: i64) -> i64 {
         + now.rem_euclid(11)
 }
 
-fn finish(app: &AppHandle, index: usize, result: Result<ProviderSnapshot, ProviderError>) {
+fn finish(
+    app: &AppHandle,
+    index: usize,
+    generation: u64,
+    result: Result<ProviderSnapshot, ProviderError>,
+) {
     let runtime = app.state::<Runtime>();
-    let view = {
+    {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
         let now = providers::now();
-        let cadence = inner.schedules[index].cadence;
-        apply_result(&mut inner, index, cadence, now, result);
-        inner.view.clone()
+        finish_poll(&mut inner, index, generation, now, result);
     };
-    publish(app, &view);
+    publish(app);
+}
+
+fn finish_poll(
+    inner: &mut Inner,
+    index: usize,
+    generation: u64,
+    now: i64,
+    result: Result<ProviderSnapshot, ProviderError>,
+) {
+    let schedule = &mut inner.schedules[index];
+    if schedule.poll_generation != Some(generation) {
+        return;
+    }
+    schedule.poll_generation = None;
+    inner.view.providers[index].refreshing = false;
+    if generation != schedule.generation
+        || !inner
+            .view
+            .settings
+            .is_enabled(inner.view.providers[index].id)
+    {
+        if let Err(error) = &result {
+            preserve_service_wait(schedule, error, now);
+        }
+        if inner
+            .view
+            .settings
+            .is_enabled(inner.view.providers[index].id)
+            && schedule.blocked_until > now
+        {
+            inner.view.providers[index].next_retry_at = Some(schedule.blocked_until);
+            inner.view.providers[index].error = schedule.cooldown_issue.clone();
+        }
+        return;
+    }
+    let cadence = schedule.cadence;
+    apply_result(inner, index, cadence, now, result);
+}
+
+fn preserve_service_wait(schedule: &mut Schedule, error: &ProviderError, now: i64) {
+    if matches!(
+        error,
+        ProviderError::RateLimited { .. }
+            | ProviderError::AccessDenied { .. }
+            | ProviderError::Service { .. }
+    ) {
+        schedule.failures = schedule.failures.saturating_add(1);
+        schedule.blocked_until = schedule
+            .blocked_until
+            .max(error.retry_at().unwrap_or(0))
+            .max(now.saturating_add(backoff(schedule.failures, now)));
+        schedule.next_due = schedule.next_due.max(schedule.blocked_until);
+        schedule.waiting_for_sign_in = false;
+        schedule.cooldown_issue = Some(error.issue());
+    }
 }
 
 fn apply_result(
@@ -278,6 +851,7 @@ fn apply_result(
             schedule.failures = 0;
             schedule.blocked_until = 0;
             schedule.waiting_for_sign_in = false;
+            schedule.cooldown_issue = None;
             state.error = None;
             state.next_retry_at = None;
             state.snapshot = Some(snapshot);
@@ -286,6 +860,7 @@ fn apply_result(
         Err(error) => {
             schedule.failures = schedule.failures.saturating_add(1);
             schedule.waiting_for_sign_in = error.requires_sign_in();
+            schedule.cooldown_issue = (!schedule.waiting_for_sign_in).then(|| error.issue());
             let delay = if schedule.waiting_for_sign_in {
                 300
             } else {
@@ -296,7 +871,7 @@ fn apply_result(
             if schedule.waiting_for_sign_in {
                 state.snapshot = None;
             }
-            state.error = Some(error.to_string());
+            state.error = Some(error.issue());
             state.next_retry_at = Some(schedule.blocked_until);
             state.stale = true;
         }
@@ -321,7 +896,9 @@ impl Reading {
 fn tray_reading(view: &AppState, now: i64) -> Option<Reading> {
     view.providers
         .iter()
-        .filter(|state| view.settings.providers.includes(state.id))
+        .filter(|state| {
+            view.settings.providers.includes(state.id) && view.settings.is_enabled(state.id)
+        })
         .flat_map(|state| {
             state.snapshot.iter().flat_map(move |snapshot| {
                 snapshot.limits.iter().filter_map(move |limit| {
@@ -360,7 +937,19 @@ fn tray_reading(view: &AppState, now: i64) -> Option<Reading> {
         .min_by(|a, b| a.remaining.total_cmp(&b.remaining))
 }
 
-pub fn publish(app: &AppHandle, view: &AppState) {
+pub fn publish(app: &AppHandle) {
+    let handle = app.clone();
+    // Read state at delivery time so a delayed poll cannot restore an older sign-in screen.
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Ok(view) = handle.state::<Runtime>().state() {
+            publish_view(&handle, &view);
+        }
+    }) {
+        eprintln!("Could not update the usage panel: {error}");
+    }
+}
+
+fn publish_view(app: &AppHandle, view: &AppState) {
     let reading = tray_reading(view, providers::now());
     let mode = view.settings.percentage_mode;
     let percentage_label = match mode {
@@ -426,6 +1015,7 @@ mod tests {
                         }],
                     }),
                     error: None,
+                    recovery: None,
                     refreshing: false,
                     stale: false,
                     next_retry_at: None,
@@ -624,6 +1214,375 @@ mod tests {
             assert_eq!(inner.schedules[0].next_due, 120);
             assert!(inner.view.providers[0].refreshing);
         }
+    }
+
+    #[test]
+    fn recovery_clears_account_data_and_blocks_duplicate_actions_until_cleanup() {
+        let mut inner = inner();
+        inner.view.providers[0].error = Some(ProviderError::Authentication.issue());
+        inner.schedules[0].waiting_for_sign_in = true;
+        let cancel = Arc::new(AtomicBool::new(false));
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::Renew,
+            cancel.clone(),
+            150,
+        )
+        .unwrap();
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert_eq!(
+            inner.view.providers[0].recovery,
+            Some(RecoveryStage::Checking)
+        );
+        let due = inner.schedules[0].next_due;
+        queue_manual_refresh(&mut inner);
+        assert_eq!(inner.schedules[0].next_due, due);
+
+        cancel.store(true, Ordering::Relaxed);
+        inner.view.providers[0].recovery = Some(RecoveryStage::Cancelling);
+        assert!(
+            begin_recovery(&mut inner, 0, platform::auth::Action::SignIn, cancel, 181).is_err()
+        );
+        complete_recovery(&mut inner, 0, true, None, None, 182);
+        assert!(inner.schedules[0].recovery_cancel.is_none());
+        assert!(inner.view.providers[0].recovery.is_none());
+        assert!(inner.view.providers[0].snapshot.is_none());
+    }
+
+    #[test]
+    fn recovery_requires_an_auth_issue_and_respects_service_waits() {
+        for error in [
+            ProviderError::Network,
+            ProviderError::AccessDenied {
+                retry_at: Some(5000),
+            },
+            ProviderError::RateLimited {
+                retry_at: Some(5000),
+            },
+            ProviderError::Credential(credentials::CredentialError::Unreadable),
+        ] {
+            let mut inner = inner();
+            apply_result(&mut inner, 0, 60, 150, Err(error));
+            let cancel = Arc::new(AtomicBool::new(false));
+            assert!(
+                begin_recovery(&mut inner, 0, platform::auth::Action::SignIn, cancel, 151).is_err()
+            );
+            assert!(inner.schedules[0].recovery_cancel.is_none());
+        }
+        let mut inner = inner();
+        inner.view.providers[0].error = Some(Issue {
+            kind: IssueKind::Recovery,
+            message: "Try again".into(),
+        });
+        inner.schedules[0].blocked_until = 5000;
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::Renew,
+                Arc::new(AtomicBool::new(false)),
+                151
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cancelled_recovery_keeps_retry_after_received_during_a_check() {
+        let mut inner = inner();
+        apply_result(&mut inner, 0, 60, 100, Err(ProviderError::Authentication));
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::Renew,
+            Arc::new(AtomicBool::new(false)),
+            150,
+        )
+        .unwrap();
+        complete_recovery(
+            &mut inner,
+            0,
+            true,
+            Some(Err(ProviderError::RateLimited {
+                retry_at: Some(5000),
+            })),
+            None,
+            151,
+        );
+        queue_manual_refresh(&mut inner);
+        assert_eq!(inner.schedules[0].blocked_until, 5000);
+        assert!(!inner.schedules[0].waiting_for_sign_in);
+        assert_eq!(
+            inner.view.providers[0].error.as_ref().unwrap().kind,
+            IssueKind::RateLimited
+        );
+        assert!(inner.view.providers[0].snapshot.is_none());
+    }
+
+    #[test]
+    fn cancelled_recovery_does_not_publish_a_completed_account_reading() {
+        let mut inner = inner();
+        let snapshot = inner.view.providers[0].snapshot.clone().unwrap();
+        apply_result(&mut inner, 0, 60, 100, Err(ProviderError::Authentication));
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::SignIn,
+            Arc::new(AtomicBool::new(false)),
+            150,
+        )
+        .unwrap();
+        complete_recovery(&mut inner, 0, true, Some(Ok(snapshot)), None, 151);
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert_eq!(
+            inner.view.providers[0].error.as_ref().unwrap().kind,
+            IssueKind::Recovery
+        );
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::SignIn,
+                Arc::new(AtomicBool::new(false)),
+                152
+            )
+            .is_err()
+        );
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::SignIn,
+                Arc::new(AtomicBool::new(false)),
+                180
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn recovery_waits_for_unlock_and_an_enabled_provider() {
+        let mut inner = inner();
+        apply_result(&mut inner, 0, 60, 100, Err(ProviderError::Authentication));
+        inner.view.paused = true;
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::Renew,
+                Arc::new(AtomicBool::new(false)),
+                150
+            )
+            .is_err()
+        );
+        inner.view.paused = false;
+        inner.view.settings.set_enabled(ProviderId::Claude, false);
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::Renew,
+                Arc::new(AtomicBool::new(false)),
+                150
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn disconnect_clears_readings_and_discards_an_inflight_poll() {
+        let mut inner = inner();
+        let snapshot = inner.view.providers[0].snapshot.clone().unwrap();
+        inner.schedules[0].poll_generation = Some(0);
+        inner.view.providers[0].refreshing = true;
+        change_connection(&mut inner, 0, false, 150);
+        assert!(!inner.view.settings.is_enabled(ProviderId::Claude));
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert!(!inner.view.providers[0].refreshing);
+        assert!(tray_reading(&inner.view, 150).is_none());
+        let due = inner.schedules[0].next_due;
+        queue_manual_refresh(&mut inner);
+        assert_eq!(inner.schedules[0].next_due, due);
+
+        finish_poll(&mut inner, 0, 0, 151, Ok(snapshot));
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert!(inner.view.providers[0].error.is_none());
+        assert!(inner.schedules[0].poll_generation.is_none());
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::SignIn,
+                Arc::new(AtomicBool::new(false)),
+                160
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn connecting_again_waits_for_a_new_reading() {
+        let mut inner = inner();
+        let mut snapshot = inner.view.providers[0].snapshot.clone().unwrap();
+        inner.schedules[0].poll_generation = Some(0);
+        inner.schedules[0].last_started = 100;
+        change_connection(&mut inner, 0, false, 101);
+        change_connection(&mut inner, 0, true, 102);
+        assert_eq!(inner.schedules[0].next_due, 110);
+        assert!(inner.view.providers[0].refreshing);
+        finish_poll(&mut inner, 0, 0, 103, Ok(snapshot.clone()));
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert!(!inner.view.providers[0].refreshing);
+
+        let generation = inner.schedules[0].generation;
+        inner.schedules[0].poll_generation = Some(generation);
+        inner.view.providers[0].refreshing = true;
+        finish_poll(&mut inner, 0, 0, 111, Ok(snapshot.clone()));
+        assert!(inner.view.providers[0].refreshing);
+        snapshot.fetched_at = 112;
+        finish_poll(&mut inner, 0, generation, 112, Ok(snapshot));
+        assert_eq!(
+            inner.view.providers[0]
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .fetched_at,
+            112
+        );
+    }
+
+    #[test]
+    fn disconnect_and_connect_cannot_clear_a_service_cooldown() {
+        let mut inner = inner();
+        inner.schedules[0].poll_generation = Some(0);
+        change_connection(&mut inner, 0, false, 150);
+        finish_poll(
+            &mut inner,
+            0,
+            0,
+            151,
+            Err(ProviderError::RateLimited {
+                retry_at: Some(5000),
+            }),
+        );
+        assert!(inner.view.providers[0].error.is_none());
+        assert!(inner.view.providers[0].next_retry_at.is_none());
+        change_connection(&mut inner, 0, true, 152);
+        queue_manual_refresh(&mut inner);
+        assert_eq!(inner.schedules[0].blocked_until, 5000);
+        assert_eq!(inner.view.providers[0].next_retry_at, Some(5000));
+        assert_eq!(
+            inner.view.providers[0].error.as_ref().unwrap().kind,
+            IssueKind::RateLimited
+        );
+        assert!(
+            begin_recovery(
+                &mut inner,
+                0,
+                platform::auth::Action::SignIn,
+                Arc::new(AtomicBool::new(false)),
+                160
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn disconnect_cancels_auth_without_republishing_its_result() {
+        let mut inner = inner();
+        let snapshot = inner.view.providers[0].snapshot.clone().unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::SignIn,
+            cancel.clone(),
+            150,
+        )
+        .unwrap();
+        change_connection(&mut inner, 0, false, 151);
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(
+            inner.view.providers[0].recovery,
+            Some(RecoveryStage::Cancelling)
+        );
+        complete_recovery(&mut inner, 0, true, Some(Ok(snapshot)), None, 152);
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert!(inner.view.providers[0].error.is_none());
+        assert!(inner.view.providers[0].recovery.is_none());
+        assert!(inner.schedules[0].recovery_cancel.is_none());
+        assert!(!inner.view.settings.is_enabled(ProviderId::Claude));
+    }
+
+    #[test]
+    fn explicit_sign_in_can_change_a_healthy_hidden_provider() {
+        let mut inner = inner();
+        inner.view.settings.providers = settings::ProviderSelection::Codex;
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::SignIn,
+            Arc::new(AtomicBool::new(false)),
+            150,
+        )
+        .unwrap();
+        assert!(inner.view.providers[0].snapshot.is_none());
+        assert_eq!(
+            inner.view.providers[0].recovery,
+            Some(RecoveryStage::SigningIn)
+        );
+    }
+
+    #[test]
+    fn hidden_provider_can_be_reconnected_from_settings() {
+        let mut inner = inner();
+        inner.view.settings.providers = settings::ProviderSelection::Codex;
+        apply_result(&mut inner, 0, 60, 100, Err(ProviderError::Authentication));
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::Renew,
+            Arc::new(AtomicBool::new(false)),
+            150,
+        )
+        .unwrap();
+        assert_eq!(
+            inner.view.providers[0].recovery,
+            Some(RecoveryStage::Checking)
+        );
+    }
+
+    #[test]
+    fn disconnect_during_auth_verification_retains_a_server_wait() {
+        let mut inner = inner();
+        begin_recovery(
+            &mut inner,
+            0,
+            platform::auth::Action::SignIn,
+            Arc::new(AtomicBool::new(false)),
+            150,
+        )
+        .unwrap();
+        change_connection(&mut inner, 0, false, 151);
+        complete_recovery(
+            &mut inner,
+            0,
+            true,
+            Some(Err(ProviderError::RateLimited {
+                retry_at: Some(5000),
+            })),
+            None,
+            152,
+        );
+        assert!(inner.view.providers[0].error.is_none());
+        change_connection(&mut inner, 0, true, 153);
+        assert_eq!(inner.view.providers[0].next_retry_at, Some(5000));
+        assert_eq!(
+            inner.view.providers[0].error.as_ref().unwrap().kind,
+            IssueKind::RateLimited
+        );
+        assert_eq!(inner.schedules[0].blocked_until, 5000);
     }
 
     #[test]

@@ -14,7 +14,8 @@ button, input, select { font: inherit; }
 button { cursor: pointer; }
 button, input, select { -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: default; opacity: .48; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.popover-shell:focus, .popover-shell :is(button, input, select, summary):focus { outline: none; }
+.popover-shell[data-keyboard-navigation="true"] :is(button, input, select, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 button { -webkit-user-select: none; user-select: none; }
 h1, h2, p { margin: 0; }
 
@@ -153,13 +154,24 @@ h1, h2, p { margin: 0; }
 .disabled-limit .limit-label { color: var(--secondary); }
 .notice { padding: 10px 11px; border: 1px solid var(--warning-border); background: var(--warning-soft); color: var(--warning); border-radius: 7px; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
 .error-notice { margin-bottom: 10px; }
+.provider-heading + .error-notice, .provider-heading + .recovery-notice { margin-top: 12px; }
+.recovery-notice { color: var(--secondary); font-size: 11px; line-height: 1.5; margin-bottom: 10px; }
+.recovery-progress { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.recovery-progress .icon { flex-shrink: 0; }
+.recovery-help { margin-top: 7px; color: var(--secondary); font-size: 10px; line-height: 1.5; }
+.recovery-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.recovery-actions .primary-button, .recovery-actions .text-button { font-size: 10px; padding: 6px 8px; }
+.recovery-notice > .text-button { margin: 7px 0 0 -8px; padding: 5px 8px; font-size: 10px; }
+.sign-in-confirmation { padding: 10px; margin-top: 8px; color: var(--secondary); background: var(--accent-soft); border-radius: 6px; font-size: 10px; line-height: 1.5; }
+.sign-in-confirmation .recovery-actions { margin-top: 7px; }
+.disconnected-state { padding: 17px 0 8px; color: var(--secondary); font-size: 11px; line-height: 1.5; }
+.disconnected-state .primary-button { margin-top: 12px; padding: 6px 10px; font-size: 10px; }
 .retry-time { margin-top: 5px; font-variant-numeric: tabular-nums; }
 .stale-note { font-size: 10px; color: var(--warning); line-height: 1.5; margin: 0 0 10px; }
 .selection-note { font-size: 10px; color: var(--secondary); line-height: 1.5; margin: 0 0 10px; }
 .provider-details { color: var(--secondary); font-size: 10px; line-height: 1.5; border-top: 1px solid var(--line); margin-top: 7px; padding-top: 9px; overflow-wrap: anywhere; }
 .provider-details summary { color: var(--secondary); cursor: pointer; font-size: 10px; }
 .provider-details summary:hover { color: var(--text); }
-.provider-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .provider-details p { margin-top: 8px; }
 .provider-details strong { font-weight: 550; }
 .unknown-fields ul { padding-left: 15px; margin: 5px 0 0; }
@@ -187,6 +199,25 @@ h1, h2, p { margin: 0; }
 .settings-panel { padding: 3px 14px 14px; }
 .settings-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .settings-heading h2 { font-size: 13px; font-weight: 600; }
+.accounts-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.accounts-settings > h3 { margin: 0; font-size: 11px; font-weight: 550; }
+.accounts-settings > p { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
+.accounts-list { border: 1px solid var(--line); border-radius: 7px; background: var(--card); overflow: hidden; }
+.account-row { padding: 9px 10px; }
+.account-row + .account-row { border-top: 1px solid var(--line); }
+.account-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.account-heading h4 { margin: 0; font-size: 11px; font-weight: 550; }
+.account-heading p { margin-top: 3px; color: var(--secondary); font-size: 9px; line-height: 1.4; }
+.account-heading > .text-button { flex-shrink: 0; }
+.account-row .text-button, .account-row .primary-button { padding: 5px 7px; font-size: 10px; }
+.account-actions { display: flex; align-items: center; gap: 5px; margin: 4px 0 -2px -7px; }
+.account-row > .error-notice, .account-row > .recovery-notice { margin: 9px 0 3px; }
+.disconnect-dialog { width: min(310px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface); box-shadow: 0 12px 40px #0004; }
+.disconnect-dialog::backdrop { background: #0006; }
+.disconnect-dialog h3 { margin: 0 0 9px; font-size: 13px; font-weight: 600; line-height: 1.4; }
+.disconnect-dialog p { color: var(--secondary); font-size: 11px; line-height: 1.6; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 16px; }
+.disconnect-dialog .text-button, .disconnect-dialog .primary-button { padding: 7px 10px; font-size: 11px; }
 .icon-button { display: grid; place-items: center; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--secondary); }
 .icon-button:hover { background: var(--control); }
 .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 12px 0; border-bottom: 1px solid var(--line); color: var(--text); font-size: 11px; }

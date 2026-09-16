@@ -37,7 +37,7 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         })
         .on_menu_event(|app, event| {
             if event.id().as_ref() == QUIT_ID {
-                app.exit(0);
+                crate::runtime::request_quit(app);
             }
         })
         .build(app)?;

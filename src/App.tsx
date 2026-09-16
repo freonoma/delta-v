@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppState, Amount, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, Settings, Theme } from "./types";
+import type { AppState, Amount, IssueKind, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
 
 const native = isTauri();
 const preview = import.meta.env.DEV && !native;
 const providerNames: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
+const clientNames: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
+const issueStatuses: Record<IssueKind, string> = {
+  sign_in: "Sign in needed", authentication: "Sign in needed", recovery: "Sign in needed",
+  credential_access: "Access needed", configuration: "Setup needed", client_missing: "CLI needed",
+  access_denied: "Access denied", network: "Unavailable", rate_limited: "Waiting",
+  service: "Unavailable", response: "Unavailable",
+};
+const recoveryMessages: Record<RecoveryPhase, string> = {
+  renewing: "Reconnecting", signing_in: "Finish signing in in your browser",
+  checking: "Checking usage", cancelling: "Cancelling",
+};
 const provenanceNames: Record<Limit["provenance"], string> = {
   official: "Official", local_estimate: "Local estimate", unknown: "Unknown source",
 };
@@ -15,6 +26,58 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return "Something went wrong. Try refreshing.";
+}
+
+function providerEnabled(settings: Settings, provider: ProviderId): boolean {
+  return provider === "claude" ? settings.claude_enabled : settings.codex_enabled;
+}
+
+function signInBlocked(provider: ProviderState, now: number): boolean {
+  const kind = provider.error?.kind;
+  return provider.refreshing || provider.recovery !== null
+    || (kind !== undefined && kind !== "authentication" && kind !== "sign_in" && kind !== "recovery")
+    || (provider.next_retry_at !== null && provider.next_retry_at > now
+      && kind !== "authentication" && kind !== "sign_in" && kind !== "recovery");
+}
+
+function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
+  provider: ProviderId; disabled: boolean; onContinue: () => void; onCancel: () => void;
+}) {
+  return (
+    <div className="sign-in-confirmation" role="group" aria-label={`Sign in with ${clientNames[provider]}`}>
+      <p>This opens {clientNames[provider]}’s sign-in flow. Choosing another account also changes the account saved by {clientNames[provider]} on this Mac.</p>
+      <div className="recovery-actions">
+        <button className="primary-button" onClick={onContinue} disabled={disabled}>Continue</button>
+        <button className="text-button" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function DisconnectConfirmation({ provider, onConfirm, onCancel }: {
+  provider: ProviderId; onConfirm: () => void; onCancel: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (element && !element.open) element.showModal();
+  }, []);
+
+  return (
+    <dialog ref={dialog} className="disconnect-dialog" aria-labelledby={`${provider}-disconnect-title`}
+      aria-describedby={`${provider}-disconnect-description`} onClose={onCancel}
+      onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }}>
+      <h3 id={`${provider}-disconnect-title`}>Disconnect {providerNames[provider]} from Delta-V?</h3>
+      <p id={`${provider}-disconnect-description`}>Usage checks will stop and the current reading will be cleared. {clientNames[provider]} will stay signed in. You can reconnect at any time.</p>
+      <div className="dialog-actions">
+        <button className="text-button" autoFocus onClick={() => dialog.current?.close()}>Cancel</button>
+        <button className="primary-button" onClick={() => {
+          dialog.current?.close();
+          onConfirm();
+        }}>Disconnect</button>
+      </div>
+    </dialog>
+  );
 }
 
 function usedPercent(limit: Limit): number | null {
@@ -170,8 +233,82 @@ function ProviderDetails({ limits, warnings }: { limits: Limit[]; warnings: stri
   );
 }
 
-function ProviderColumn({ provider, settings, now, expanded }: { provider: ProviderState; settings: Settings; now: number; expanded: boolean }) {
-  const snapshot = provider.snapshot;
+function ProviderFeedback({ provider, recovery, now, onReconnect, onCancel, showActions = true }: {
+  provider: ProviderState;
+  recovery: RecoveryPhase | null;
+  now: number;
+  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
+  onCancel: (provider: ProviderId) => void;
+  showActions?: boolean;
+}) {
+  const [confirmSignIn, setConfirmSignIn] = useState(false);
+  useEffect(() => { if (recovery) setConfirmSignIn(false); }, [recovery]);
+  if (recovery) {
+    return (
+      <div className="recovery-notice" role="status">
+        <p className="recovery-progress"><Icon name="refresh" spinning />{recoveryMessages[recovery]}</p>
+        {recovery === "signing_in" && <p className="recovery-help">Return here after finishing with {clientNames[provider.id]}.</p>}
+        {recovery !== "checking" && (
+          <button className="text-button" onClick={() => onCancel(provider.id)} disabled={recovery === "cancelling"}>Cancel</button>
+        )}
+      </div>
+    );
+  }
+  const issue = provider.error;
+  if (!issue) return null;
+  const canReconnect = issue.kind === "authentication" || issue.kind === "recovery";
+  const needsSignIn = issue.kind === "sign_in";
+  let help: string | null = null;
+  if (canReconnect || needsSignIn) {
+    help = provider.id === "claude"
+      ? "Claude Desktop alone does not connect Delta-V. This uses the standalone Claude Code CLI."
+      : "Uses the Codex CLI sign-in for your ChatGPT account.";
+  } else if (issue.kind === "client_missing") {
+    help = provider.id === "codex"
+      ? "Install or update ChatGPT, Codex, or the official Codex CLI. The README’s “Connect your accounts” section has the steps."
+      : "Install the official Claude Code CLI. The README’s “Connect your accounts” section has the steps.";
+  } else if (issue.kind === "credential_access") {
+    help = "Check file and Keychain access for the CLI’s saved sign-in. The README lists the locations Delta-V reads.";
+  } else if (issue.kind === "configuration") {
+    help = "See “Connect your accounts” in the README for setup steps.";
+  }
+  return (
+    <div className="notice error-notice" role="status">
+      <p>{issue.message}</p>
+      {help && <p className="recovery-help">{help}</p>}
+      {showActions && (needsSignIn || canReconnect) && !confirmSignIn && (
+        <div className="recovery-actions">
+          <button className="primary-button" disabled={provider.refreshing} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
+            {needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Reconnect"}
+          </button>
+          {canReconnect && <button className="text-button" disabled={signInBlocked(provider, now)} onClick={() => setConfirmSignIn(true)}>Sign in again</button>}
+        </div>
+      )}
+      {showActions && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInBlocked(provider, now)} onContinue={() => {
+        setConfirmSignIn(false);
+        onReconnect(provider.id, "sign_in");
+      }} onCancel={() => setConfirmSignIn(false)} />}
+      {provider.next_retry_at !== null && provider.next_retry_at > now && (
+        <p className="retry-time">Retry in {shortDuration(provider.next_retry_at - now)}</p>
+      )}
+    </div>
+  );
+}
+
+function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, connectionPending, onReconnect, onCancel, onConnect }: {
+  provider: ProviderState;
+  settings: Settings;
+  now: number;
+  expanded: boolean;
+  pendingRecovery: RecoveryPhase | null;
+  connectionPending: boolean;
+  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
+  onCancel: (provider: ProviderId) => void;
+  onConnect: (provider: ProviderId) => void;
+}) {
+  const enabled = providerEnabled(settings, provider.id);
+  const snapshot = enabled ? provider.snapshot : null;
+  const recovery = pendingRecovery === "cancelling" ? pendingRecovery : provider.recovery ?? pendingRecovery;
   const expired = snapshot?.limits.some((limit) =>
     limit.enabled && limit.kind === "quota" && limit.resets_at !== null && limit.resets_at <= now,
   ) ?? false;
@@ -190,25 +327,34 @@ function ProviderColumn({ provider, settings, now, expanded }: { provider: Provi
   const remaining = featured ? remainingPercent(featured) : null;
   const percentage = remaining === null ? null : quotaPercent(remaining, settings.percentage_mode);
   const low = remaining !== null && remaining < settings.threshold;
-  const status = provider.refreshing ? "Refreshing" : !snapshot ? "Not connected" : stale ? "Stale" : "Updated";
+  const busy = provider.refreshing || recovery !== null;
+  const status = recovery ? recovery === "signing_in" ? "Signing in" : recoveryMessages[recovery]
+    : !enabled ? "Disconnected"
+    : provider.refreshing ? snapshot ? "Refreshing" : "Loading"
+    : provider.error ? issueStatuses[provider.error.kind]
+    : !snapshot ? "Loading" : stale ? "Stale" : "Updated";
   const emptyHeadline = snapshot
     ? expired ? "Waiting for fresh usage" : tracksThisProvider ? "Tracked window unavailable" : "No quota reading"
-    : provider.refreshing ? "Reading usage" : "No usage reading";
+    : "Reading usage";
   const emptyDescription = snapshot
     ? expired ? "A quota window has reached its reset time" : tracksThisProvider ? "Choose another window in Settings" : "The provider has no usable quota percentage"
-    : provider.refreshing ? "Checking your account limits" : "Connect through your CLI";
+    : "Checking your account limits";
   return (
-    <section className={`provider-column ${provider.id}`} aria-label={`${providerNames[provider.id]} usage`} aria-busy={provider.refreshing}>
+    <section className={`provider-column ${provider.id}`} aria-label={`${providerNames[provider.id]} usage`} aria-busy={busy}>
       <div className="provider-heading">
         <div className="provider-title">
           <h2>{providerNames[provider.id]}</h2>
           {expanded && snapshot?.plan && <span className="plan-label">{snapshot.plan}</span>}
         </div>
-        <span className={`connection-status${snapshot && stale ? " stale" : ""}${provider.refreshing ? " loading" : ""}${!snapshot ? " disconnected" : ""}`} title={snapshot ? `Updated ${sampleAge(snapshot.fetched_at, now)}` : status}>
+        <span className={`connection-status${snapshot && stale ? " stale" : ""}${busy ? " loading" : ""}${!snapshot ? " disconnected" : ""}`} title={snapshot ? `Updated ${sampleAge(snapshot.fetched_at, now)}` : status}>
           <span className="status-dot" />{status}
         </span>
       </div>
-      <div className={`remaining-summary${low ? " low" : ""}`}>
+      {!enabled && !recovery && <div className="disconnected-state">
+        <p>Usage checks are off. {clientNames[provider.id]} stays signed in.</p>
+        <button className="primary-button" aria-label={`Connect ${providerNames[provider.id]}`} disabled={connectionPending} onClick={() => onConnect(provider.id)}>{connectionPending ? "Connecting" : "Connect"}</button>
+      </div>}
+      {enabled && (snapshot || (!provider.error && !recovery)) && <div className={`remaining-summary${low ? " low" : ""}`}>
         {percentage !== null ? (
           <>
             <div className="remaining-number">{wholePercent(percentage, settings.percentage_mode)}<span>%</span></div>
@@ -223,15 +369,8 @@ function ProviderColumn({ provider, settings, now, expanded }: { provider: Provi
             <span>{emptyDescription}</span>
           </div>
         )}
-      </div>
-      {provider.error && (
-        <div className="notice error-notice" role="status">
-          <p>{provider.error}</p>
-          {provider.next_retry_at !== null && provider.next_retry_at > now && (
-            <p className="retry-time">Retry in {shortDuration(provider.next_retry_at - now)}</p>
-          )}
-        </div>
-      )}
+      </div>}
+      {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} />}
       {stale && snapshot && <p className="stale-note">Showing the last reading from {sampleAge(snapshot.fetched_at, now)}.</p>}
       {missingSelected && <p className="selection-note">A chosen window is unavailable. Choose another in Settings or use Show more.</p>}
       {shown.length > 0 ? (
@@ -247,10 +386,10 @@ function ProviderColumn({ provider, settings, now, expanded }: { provider: Provi
             />
           ))}
         </ul>
-      ) : !provider.error && !missingSelected && (
+      ) : snapshot && !provider.error && !recovery && !missingSelected && (
         <div className="empty-state">
           <span className="empty-rule" />
-          <p>{provider.refreshing ? "Your limits will appear here." : snapshot ? "No quota windows are available." : `Sign in to ${providerNames[provider.id]} ${provider.id === "claude" ? "Code" : "CLI"}, then choose Check now.`}</p>
+          <p>{provider.refreshing ? "Your limits will appear here." : "No quota windows are available."}</p>
         </div>
       )}
       {expanded && snapshot && (
@@ -301,7 +440,69 @@ function WindowPicker({ provider, selected, onChange }: { provider: ProviderStat
   );
 }
 
-function SettingsPanel({ state, saving, now, onSave, onClose, onThemePreview }: { state: AppState; saving: boolean; now: number; onSave: (settings: Settings) => Promise<void>; onClose: () => void; onThemePreview: (theme: Theme | null) => void }) {
+function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEnabled, onReconnect, onCancel }: {
+  provider: ProviderState;
+  enabled: boolean;
+  pending: boolean;
+  recovery: RecoveryPhase | null;
+  now: number;
+  paused: boolean;
+  onSetEnabled: (provider: ProviderId, enabled: boolean) => void;
+  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
+  onCancel: (provider: ProviderId) => void;
+}) {
+  const [confirmSignIn, setConfirmSignIn] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  useEffect(() => { if (!enabled || recovery) setConfirmSignIn(false); }, [enabled, recovery]);
+  useEffect(() => { if (!enabled) setConfirmDisconnect(false); }, [enabled]);
+  const status = !enabled ? "Disconnected from Delta-V" : recovery ? recoveryMessages[recovery]
+    : provider.refreshing ? "Checking usage" : provider.error ? issueStatuses[provider.error.kind]
+    : provider.snapshot ? "Connected" : "Ready to check";
+  const canReconnect = provider.error?.kind === "authentication" || provider.error?.kind === "recovery";
+  const signInDisabled = paused || pending || recovery !== null || signInBlocked(provider, now);
+  return (
+    <div className="account-row" role="group" aria-label={`${providerNames[provider.id]} connection`} aria-busy={pending || recovery !== null}>
+      <div className="account-heading">
+        <div><h4>{providerNames[provider.id]}</h4><p>{status}</p></div>
+        <button className="text-button" aria-label={`${enabled ? "Disconnect" : "Connect"} ${providerNames[provider.id]}${enabled ? " from Delta-V" : ""}`} disabled={pending || (!enabled && recovery !== null)} onClick={() => {
+          if (enabled) {
+            setConfirmSignIn(false);
+            setConfirmDisconnect(true);
+          } else onSetEnabled(provider.id, true);
+        }}>
+          {pending ? enabled ? "Disconnecting" : "Connecting" : enabled ? "Disconnect" : "Connect"}
+        </button>
+      </div>
+      {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} showActions={false} />}
+      {enabled && !recovery && !confirmSignIn && <div className="account-actions">
+        {canReconnect && <button className="text-button" disabled={signInDisabled} onClick={() => onReconnect(provider.id, "renew")}>Reconnect</button>}
+        <button className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>Sign in again</button>
+      </div>}
+      {enabled && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInDisabled} onContinue={() => {
+        setConfirmSignIn(false);
+        onReconnect(provider.id, "sign_in");
+      }} onCancel={() => setConfirmSignIn(false)} />}
+      {enabled && confirmDisconnect && <DisconnectConfirmation provider={provider.id} onConfirm={() => {
+        setConfirmDisconnect(false);
+        onSetEnabled(provider.id, false);
+      }} onCancel={() => setConfirmDisconnect(false)} />}
+    </div>
+  );
+}
+
+function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
+  state: AppState;
+  saving: boolean;
+  now: number;
+  pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
+  pendingConnection: Partial<Record<ProviderId, boolean>>;
+  onSave: (settings: Settings) => Promise<void>;
+  onClose: () => void;
+  onThemePreview: (theme: Theme | null) => void;
+  onSetEnabled: (provider: ProviderId, enabled: boolean) => void;
+  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
+  onCancel: (provider: ProviderId) => void;
+}) {
   const panel = useRef<HTMLElement>(null);
   const [draft, setDraft] = useState(state.settings);
   const [threshold, setThreshold] = useState(String(state.settings.threshold));
@@ -335,7 +536,11 @@ function SettingsPanel({ state, saving, now, onSave, onClose, onThemePreview }: 
     }
     setValidation(null);
     try {
-      await onSave({ ...draft, providers: state.settings.providers, tracked_limit: tracked, threshold: parsedThreshold, refresh_seconds: parsedInterval });
+      await onSave({
+        ...draft, providers: state.settings.providers, claude_enabled: state.settings.claude_enabled,
+        codex_enabled: state.settings.codex_enabled, tracked_limit: tracked, threshold: parsedThreshold,
+        refresh_seconds: parsedInterval,
+      });
       onClose();
     } catch (error: unknown) {
       setValidation(errorMessage(error));
@@ -409,27 +614,50 @@ function SettingsPanel({ state, saving, now, onSave, onClose, onThemePreview }: 
         <button className="text-button" onClick={onClose} disabled={saving}>Cancel</button>
         <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? "Saving" : "Save settings"}</button>
       </div>
+      <section className="accounts-settings" aria-label="Accounts">
+        <h3>Accounts</h3>
+        <p>Changes here apply immediately. Disconnect stops usage checks in Delta-V. It does not sign you out of Claude Code or Codex.</p>
+        <div className="accounts-list">
+          {state.providers.map((provider) => (
+            <AccountRow key={provider.id} provider={provider} enabled={providerEnabled(state.settings, provider.id)}
+              pending={pendingConnection[provider.id] ?? false} now={now} paused={state.paused}
+              recovery={pendingRecovery[provider.id] === "cancelling" ? "cancelling" : provider.recovery ?? pendingRecovery[provider.id] ?? null}
+              onSetEnabled={onSetEnabled} onReconnect={onReconnect} onCancel={onCancel} />
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
 
 export default function App() {
-  const [state, setState] = useState<AppState | null>(() => preview ? createPreview() : null);
+  const [state, setState] = useState<AppState | null>(() => preview ? createPreview(window.location.search) : null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [keyboardNavigation, setKeyboardNavigation] = useState(false);
+  const [pendingRecovery, setPendingRecovery] = useState<Partial<Record<ProviderId, RecoveryPhase>>>({});
+  const [pendingConnection, setPendingConnection] = useState<Partial<Record<ProviderId, boolean>>>({});
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   const shell = useRef<HTMLDivElement>(null);
+  const focusFrame = useRef(0);
   const content = useRef<HTMLDivElement>(null);
   const lastSize = useRef("");
+  const recoveryCommands = useRef(new Set<ProviderId>());
+  const connectionCommands = useRef(new Set<ProviderId>());
+  const previewTimers = useRef<Partial<Record<ProviderId, number>>>({});
   const selection = state?.settings.providers ?? "both";
   const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => window.clearInterval(timer);
+    const recoveryTimers = previewTimers.current;
+    return () => {
+      window.clearInterval(timer);
+      for (const recoveryTimer of Object.values(recoveryTimers)) window.clearTimeout(recoveryTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -442,14 +670,21 @@ export default function App() {
       if (!disposed) {
         setExpanded(false);
         setSettingsOpen(false);
+        setKeyboardNavigation(false);
+        window.cancelAnimationFrame(focusFrame.current);
+        focusFrame.current = window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
       }
     }).then((stop) => { if (disposed) stop(); else unlistenOpen = stop; }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     void listen<AppState>("usage-updated", (event) => {
       receivedEvent = true;
       if (!disposed) setState(event.payload);
-    }).then((stop) => { if (disposed) stop(); else unlisten = stop; }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    void invoke<AppState>("get_state").then((initial) => { if (!disposed && !receivedEvent) setState(initial); }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); };
+    }).then(async (stop) => {
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      const initial = await invoke<AppState>("get_state");
+      if (!disposed && !receivedEvent) setState(initial);
+    }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
+    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); window.cancelAnimationFrame(focusFrame.current); };
   }, []);
 
   useEffect(() => {
@@ -496,8 +731,16 @@ export default function App() {
   const saveSettings = useCallback(async (settings: Settings) => {
     setSaving(true);
     try {
-      if (preview) setState((current) => current ? { ...current, settings } : current);
-      else setState(await invoke<AppState>("save_settings", { settings }));
+      if (preview) setState((current) => current ? {
+        ...current, settings: { ...settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled },
+      } : current);
+      else {
+        const saved = await invoke<AppState>("save_settings", { settings });
+        setState((current) => current ? {
+          ...current, settings: { ...saved.settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled },
+          settings_error: saved.settings_error,
+        } : saved);
+      }
       setError(null);
     } finally {
       setSaving(false);
@@ -517,13 +760,135 @@ export default function App() {
   }
 
   async function refresh() {
+    if (recoveryCommands.current.size > 0 || connectionCommands.current.size > 0 || state?.providers.some((provider) => provider.recovery !== null)) return;
     setError(null);
     if (preview) {
-      setState((current) => current ? { ...current, providers: current.providers.map((provider) => ({ ...provider, snapshot: provider.snapshot ? { ...provider.snapshot, fetched_at: Math.floor(Date.now() / 1000) } : null })) } : current);
+      setState((current) => current ? { ...current, providers: current.providers.map((provider) => ({ ...provider, snapshot: providerEnabled(current.settings, provider.id) && provider.snapshot ? { ...provider.snapshot, fetched_at: Math.floor(Date.now() / 1000) } : null })) } : current);
       return;
     }
     try { await invoke("refresh_usage"); }
     catch (caught: unknown) { setError(errorMessage(caught)); }
+  }
+
+  function setPreviewRecovery(providerId: ProviderId, recovery: RecoveryPhase | null) {
+    setState((current) => current ? {
+      ...current,
+      providers: current.providers.map((provider) => provider.id === providerId ? { ...provider, recovery } : provider),
+    } : current);
+  }
+
+  function simulateRecovery(providerId: ProviderId, action: ReconnectAction) {
+    setState((current) => current ? {
+      ...current, providers: current.providers.map((provider) => provider.id === providerId ? {
+        ...provider, snapshot: null, error: null, recovery: action === "renew" ? "renewing" : "signing_in", stale: true,
+      } : provider),
+    } : current);
+    previewTimers.current[providerId] = window.setTimeout(() => {
+      setPreviewRecovery(providerId, "checking");
+      previewTimers.current[providerId] = window.setTimeout(() => {
+        const sample = createPreview().providers.find((provider) => provider.id === providerId);
+        if (sample?.snapshot) {
+          const connected = { ...sample, snapshot: { ...sample.snapshot, fetched_at: Math.floor(Date.now() / 1000) } };
+          setState((current) => current && providerEnabled(current.settings, providerId) ? {
+            ...current,
+            providers: current.providers.map((provider) => provider.id === providerId ? connected : provider),
+          } : current);
+        }
+        delete previewTimers.current[providerId];
+      }, 900);
+    }, action === "renew" ? 1500 : 5000);
+  }
+
+  function clearPendingRecovery(provider: ProviderId) {
+    recoveryCommands.current.delete(provider);
+    setPendingRecovery((current) => {
+      const next = { ...current };
+      delete next[provider];
+      return next;
+    });
+  }
+
+  async function reconnect(provider: ProviderId, action: ReconnectAction) {
+    const current = state?.providers.find((candidate) => candidate.id === provider);
+    if (!state || !current || !providerEnabled(state.settings, provider) || state.paused || current.recovery || current.refreshing
+      || recoveryCommands.current.has(provider) || connectionCommands.current.has(provider)) return;
+    if (action === "sign_in" && signInBlocked(current, now)) return;
+    recoveryCommands.current.add(provider);
+    setPendingRecovery((pending) => ({ ...pending, [provider]: action === "renew" ? "renewing" : "signing_in" }));
+    setError(null);
+    try {
+      if (preview) simulateRecovery(provider, action);
+      else if (native) await invoke("reconnect_provider", { provider, action });
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+    } finally {
+      clearPendingRecovery(provider);
+    }
+  }
+
+  async function cancelReconnect(provider: ProviderId) {
+    const current = state?.providers.find((candidate) => candidate.id === provider);
+    if (!current?.recovery || current.recovery === "checking" || current.recovery === "cancelling" || recoveryCommands.current.has(provider)) return;
+    recoveryCommands.current.add(provider);
+    setPendingRecovery((pending) => ({ ...pending, [provider]: "cancelling" }));
+    setError(null);
+    try {
+      if (preview) {
+        window.clearTimeout(previewTimers.current[provider]);
+        setPreviewRecovery(provider, "cancelling");
+        previewTimers.current[provider] = window.setTimeout(() => {
+          setState((currentState) => currentState ? {
+            ...currentState, providers: currentState.providers.map((candidate) => candidate.id === provider ? {
+              ...candidate, recovery: null,
+              error: providerEnabled(currentState.settings, provider) ? { kind: "recovery", message: "Sign-in was cancelled. Reconnect when you are ready." } : null,
+            } : candidate),
+          } : currentState);
+          delete previewTimers.current[provider];
+        }, 300);
+      } else if (native) await invoke("cancel_reconnect", { provider });
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+    } finally {
+      clearPendingRecovery(provider);
+    }
+  }
+
+  async function setProviderEnabled(providerId: ProviderId, enabled: boolean) {
+    if (!state || providerEnabled(state.settings, providerId) === enabled || connectionCommands.current.has(providerId)) return;
+    const provider = state.providers.find((candidate) => candidate.id === providerId);
+    if (!provider || (enabled && provider.recovery !== null)) return;
+    connectionCommands.current.add(providerId);
+    setPendingConnection((pending) => ({ ...pending, [providerId]: true }));
+    setError(null);
+    try {
+      if (preview) {
+        window.clearTimeout(previewTimers.current[providerId]);
+        delete previewTimers.current[providerId];
+        const sample = createPreview().providers.find((candidate) => candidate.id === providerId);
+        const recovering = provider.recovery !== null;
+        setState((current) => current ? {
+          ...current,
+          settings: { ...current.settings, [providerId === "claude" ? "claude_enabled" : "codex_enabled"]: enabled },
+          providers: current.providers.map((candidate) => candidate.id !== providerId ? candidate : enabled && sample ? sample : {
+            ...candidate, snapshot: null, error: null, refreshing: false, stale: true,
+            next_retry_at: null, recovery: recovering ? "cancelling" : null,
+          }),
+        } : current);
+        if (recovering) previewTimers.current[providerId] = window.setTimeout(() => {
+          setPreviewRecovery(providerId, null);
+          delete previewTimers.current[providerId];
+        }, 300);
+      } else if (native) await invoke("set_provider_enabled", { provider: providerId, enabled });
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+    } finally {
+      connectionCommands.current.delete(providerId);
+      setPendingConnection((pending) => {
+        const next = { ...pending };
+        delete next[providerId];
+        return next;
+      });
+    }
   }
 
   function retryInitialRead() {
@@ -538,9 +903,21 @@ export default function App() {
 
   const displayedProviders = state?.providers.filter((provider) => selection === "both" || selection === provider.id) ?? [];
   const refreshing = displayedProviders.some((provider) => provider.refreshing);
+  const recovering = state?.providers.some((provider) => provider.recovery !== null) || Object.keys(pendingRecovery).length > 0;
+  const changingConnection = Object.keys(pendingConnection).length > 0;
+  const hasConnectedProvider = state !== null && displayedProviders.some((provider) => providerEnabled(state.settings, provider.id));
 
   return (
-    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme}>
+    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme}
+      tabIndex={-1} data-keyboard-navigation={keyboardNavigation}
+      onPointerDownCapture={() => {
+        window.cancelAnimationFrame(focusFrame.current);
+        setKeyboardNavigation(false);
+      }}
+      onKeyDownCapture={(event) => {
+        window.cancelAnimationFrame(focusFrame.current);
+        if (event.key === "Tab") setKeyboardNavigation(true);
+      }}>
       <header className="app-header">
         <div className="brand">
           <svg className="brand-mark" viewBox="0 0 30 18" fill="currentColor" aria-hidden="true">
@@ -570,12 +947,22 @@ export default function App() {
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
           {settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving} now={now} onSave={saveSettings} onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview} />
+            <SettingsPanel key={selection} state={state} saving={saving} now={now} onSave={saveSettings}
+              pendingRecovery={pendingRecovery} pendingConnection={pendingConnection}
+              onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
+              onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
+              onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
           ) : state ? (
             <>
               <div id="provider-limits" className={`provider-grid${selection === "both" ? " two-providers" : ""}`}>
                 {displayedProviders.map((provider) => (
-                  <ProviderColumn key={provider.id} provider={provider} settings={state.settings} now={now} expanded={expanded} />
+                  <ProviderColumn
+                    key={provider.id} provider={provider} settings={state.settings} now={now} expanded={expanded}
+                    pendingRecovery={pendingRecovery[provider.id] ?? null}
+                    connectionPending={pendingConnection[provider.id] ?? false}
+                    onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)}
+                    onConnect={(id) => void setProviderEnabled(id, true)}
+                  />
                 ))}
               </div>
               <button className="expand-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls="provider-limits">
@@ -602,7 +989,7 @@ export default function App() {
           <Icon name="settings" />Settings
         </button>
         <div className="footer-right">
-          <button className="footer-button" onClick={() => void refresh()} disabled={refreshing || (!native && !preview)}>
+          <button className="footer-button" onClick={() => void refresh()} disabled={refreshing || recovering || changingConnection || !hasConnectedProvider || (!native && !preview)}>
             <Icon name="refresh" spinning={refreshing} />{refreshing ? "Checking" : "Check now"}
           </button>
           <span className="footer-divider" />

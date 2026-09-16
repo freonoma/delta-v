@@ -1,6 +1,9 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Delta-V currently supports macOS only.");
 
+pub mod auth;
+mod claude_auth;
+
 use std::{
     ffi::c_void,
     io::Read,

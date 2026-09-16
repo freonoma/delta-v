@@ -42,7 +42,7 @@ Open `http://127.0.0.1:1420` in your browser. This preview uses sample data and 
 
 Keep each pull request focused on one problem. A few conventions matter here:
 
-- Keep credentials, polling, and parsing in Rust. Keep the frontend concerned with display and interaction, and macOS calls in `src-tauri/src/platform.rs`.
+- Keep credentials, polling, and parsing in Rust. Keep the frontend concerned with display and interaction, and macOS calls in the `platform` module.
 - Preserve where each number came from. Label estimates, leave missing readings unavailable, and keep API billing separate from subscription allowances.
 - Use typed Rust errors. Avoid `unwrap()` and `expect()` outside tests and startup code. TypeScript stays strict, without `any` or `as unknown as`.
 - Add a regression test when fixing parsing, reset calculations, or percentage and threshold logic. React render snapshots are not required.
@@ -61,7 +61,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 ```
 
-Normal tests use local fixtures. You do not need a provider account to run them. For documentation-only changes, check the wording, links, and Markdown instead.
+Normal tests use local fixtures and synthetic inputs. They do not sign in, renew tokens, or need a provider account. For documentation-only changes, check the wording, links, and Markdown instead.
 
 For interface changes, check light and dark appearance, both the single-provider and side-by-side layouts, and attach screenshots to the pull request. If you change panel positioning or focus, also check opening below the icon, closing on an outside click, and placement on a second monitor. Mention anything you could not check.
 

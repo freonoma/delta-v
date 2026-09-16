@@ -44,6 +44,8 @@ pub enum PercentageMode {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub providers: ProviderSelection,
+    pub claude_enabled: bool,
+    pub codex_enabled: bool,
     pub tracked_limit: String,
     pub threshold: u8,
     pub refresh_seconds: u64,
@@ -57,6 +59,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             providers: ProviderSelection::Both,
+            claude_enabled: true,
+            codex_enabled: true,
             tracked_limit: "auto".into(),
             threshold: 20,
             refresh_seconds: 60,
@@ -87,6 +91,20 @@ pub enum SettingsError {
 }
 
 impl Settings {
+    pub fn is_enabled(&self, provider: ProviderId) -> bool {
+        match provider {
+            ProviderId::Claude => self.claude_enabled,
+            ProviderId::Codex => self.codex_enabled,
+        }
+    }
+
+    pub fn set_enabled(&mut self, provider: ProviderId, enabled: bool) {
+        match provider {
+            ProviderId::Claude => self.claude_enabled = enabled,
+            ProviderId::Codex => self.codex_enabled = enabled,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), SettingsError> {
         if self.threshold > 100 {
             return Err(SettingsError::Threshold);
@@ -179,6 +197,41 @@ mod tests {
         assert_eq!(settings.percentage_mode, PercentageMode::Remaining);
         assert!(settings.claude_windows.is_empty());
         assert!(settings.codex_windows.is_empty());
+        assert!(settings.claude_enabled);
+        assert!(settings.codex_enabled);
+    }
+
+    #[test]
+    fn disconnected_providers_stay_disconnected_when_settings_are_saved() {
+        let settings = Settings {
+            claude_enabled: false,
+            codex_enabled: false,
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        let saved = toml::to_string(&settings).unwrap();
+        let restored: Settings = toml::from_str(&saved).unwrap();
+        assert!(!restored.is_enabled(ProviderId::Claude));
+        assert!(!restored.is_enabled(ProviderId::Codex));
+        assert_eq!(restored, settings);
+    }
+
+    #[test]
+    fn connections_are_independent_of_each_other_and_the_display_selection() {
+        let mut settings = Settings {
+            providers: ProviderSelection::Claude,
+            ..Settings::default()
+        };
+        settings.set_enabled(ProviderId::Claude, false);
+        assert!(!settings.is_enabled(ProviderId::Claude));
+        assert!(settings.is_enabled(ProviderId::Codex));
+        assert_eq!(settings.providers, ProviderSelection::Claude);
+
+        settings.set_enabled(ProviderId::Codex, false);
+        settings.set_enabled(ProviderId::Claude, true);
+        assert!(settings.is_enabled(ProviderId::Claude));
+        assert!(!settings.is_enabled(ProviderId::Codex));
+        assert_eq!(settings.providers, ProviderSelection::Claude);
     }
 
     #[test]

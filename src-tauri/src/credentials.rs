@@ -14,6 +14,7 @@ const MAX_CREDENTIAL_BYTES: u64 = 65_536;
 const MAX_CONFIG_BYTES: u64 = 262_144;
 const KEYCHAIN_ITEM_MISSING: &str = "No CLI sign-in was found in macOS Keychain";
 
+#[derive(PartialEq)]
 pub struct Credential {
     pub access_token: String,
     pub account_id: Option<String>,
@@ -23,9 +24,9 @@ pub struct Credential {
 pub enum CredentialError {
     #[error("The home directory is unavailable.")]
     MissingHome,
-    #[error("Sign in through Claude Code, then refresh Delta-V.")]
+    #[error("No Claude Code sign-in was found on this Mac.")]
     ClaudeSignIn,
-    #[error("Sign in to Codex with your ChatGPT account, then refresh Delta-V.")]
+    #[error("No supported Codex sign-in was found. Use a ChatGPT account to connect.")]
     CodexSignIn,
     #[error("Could not read the CLI credential store. Check file and Keychain access.")]
     Unreadable,
@@ -102,7 +103,7 @@ fn token(value: &Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn claude() -> Result<Credential, CredentialError> {
+fn claude_value() -> Result<Value, CredentialError> {
     let override_dir = std::env::var("CLAUDE_SECURESTORAGE_CONFIG_DIR")
         .ok()
         .or_else(|| std::env::var("CLAUDE_CONFIG_DIR").ok());
@@ -120,13 +121,29 @@ fn claude() -> Result<Credential, CredentialError> {
     });
     let service = format!("Claude Code-credentials{suffix}");
     let account = std::env::var("USER").map_err(|_| CredentialError::Unreadable)?;
-    let value = match keychain_json(&service, &account)? {
+    Ok(match keychain_json(&service, &account)? {
         Some(value) => value,
         None => {
             read_json(&directory.join(".credentials.json"))?.ok_or(CredentialError::ClaudeSignIn)?
         }
-    };
-    parse_claude(&value)
+    })
+}
+
+fn claude() -> Result<Credential, CredentialError> {
+    parse_claude(&claude_value()?)
+}
+
+pub fn claude_allows_renewal() -> Result<bool, CredentialError> {
+    let value = claude_value()?;
+    parse_claude(&value)?;
+    Ok(personal_claude_plan(&value))
+}
+
+fn personal_claude_plan(value: &Value) -> bool {
+    matches!(
+        value["claudeAiOauth"]["subscriptionType"].as_str(),
+        Some("pro" | "max")
+    )
 }
 
 fn parse_claude(value: &Value) -> Result<Credential, CredentialError> {
@@ -209,13 +226,17 @@ fn parse_codex(value: &Value) -> Result<Credential, CredentialError> {
     })
 }
 
-pub async fn load(provider: ProviderId) -> Result<Credential, CredentialError> {
-    tokio::task::spawn_blocking(move || match provider {
+pub fn load_sync(provider: ProviderId) -> Result<Credential, CredentialError> {
+    match provider {
         ProviderId::Claude => claude(),
         ProviderId::Codex => codex(),
-    })
-    .await
-    .map_err(|_| CredentialError::Unreadable)?
+    }
+}
+
+pub async fn load(provider: ProviderId) -> Result<Credential, CredentialError> {
+    tokio::task::spawn_blocking(move || load_sync(provider))
+        .await
+        .map_err(|_| CredentialError::Unreadable)?
 }
 
 #[cfg(test)]
@@ -287,6 +308,27 @@ mod tests {
             parse_claude(&json!({"claudeAiOauth":{"accessToken":"test-token","scopes":true}})),
             Err(CredentialError::Unreadable)
         ));
+    }
+
+    #[test]
+    fn claude_renewal_requires_an_explicit_personal_plan() {
+        for plan in ["pro", "max"] {
+            assert!(personal_claude_plan(
+                &json!({"claudeAiOauth":{"subscriptionType":plan}})
+            ));
+        }
+        for plan in [
+            Value::Null,
+            json!("team"),
+            json!("enterprise"),
+            json!("unknown"),
+            json!(true),
+        ] {
+            assert!(!personal_claude_plan(
+                &json!({"claudeAiOauth":{"subscriptionType":plan}})
+            ));
+        }
+        assert!(!personal_claude_plan(&json!({"claudeAiOauth":{}})));
     }
 
     #[test]

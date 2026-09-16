@@ -2,9 +2,20 @@ export type ProviderId = "claude" | "codex";
 export type ProviderSelection = ProviderId | "both";
 export type Theme = "system" | "light" | "dark";
 export type PercentageMode = "remaining" | "used";
+export type IssueKind = "sign_in" | "authentication" | "credential_access" | "configuration"
+  | "access_denied" | "network" | "rate_limited" | "service" | "response" | "client_missing" | "recovery";
+export type RecoveryPhase = "renewing" | "signing_in" | "checking" | "cancelling";
+export type ReconnectAction = "renew" | "sign_in";
+
+export interface ProviderIssue {
+  kind: IssueKind;
+  message: string;
+}
 
 export interface Settings {
   providers: ProviderSelection;
+  claude_enabled: boolean;
+  codex_enabled: boolean;
   tracked_limit: string;
   threshold: number;
   refresh_seconds: number;
@@ -45,7 +56,8 @@ export interface ProviderSnapshot {
 export interface ProviderState {
   id: ProviderId;
   snapshot: ProviderSnapshot | null;
-  error: string | null;
+  error: ProviderIssue | null;
+  recovery: RecoveryPhase | null;
   refreshing: boolean;
   stale: boolean;
   next_retry_at: number | null;

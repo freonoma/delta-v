@@ -4,6 +4,7 @@ pub mod codex;
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode, header::HeaderMap};
+use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc2822};
@@ -17,13 +18,33 @@ const CLAUDE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueKind {
+    SignIn,
+    Authentication,
+    CredentialAccess,
+    Configuration,
+    AccessDenied,
+    Network,
+    RateLimited,
+    Service,
+    Response,
+    ClientMissing,
+    Recovery,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Issue {
+    pub kind: IssueKind,
+    pub message: String,
+}
+
 #[derive(Debug, Error)]
 pub enum ProviderError {
     #[error(transparent)]
     Credential(#[from] credentials::CredentialError),
-    #[error(
-        "The saved CLI sign-in was rejected. Check your sign-in in the CLI, then refresh here."
-    )]
+    #[error("The saved sign-in was rejected. Reconnect through the provider's app to check it.")]
     Authentication,
     #[error("The usage service denied access (403).")]
     AccessDenied { retry_at: Option<i64> },
@@ -38,6 +59,27 @@ pub enum ProviderError {
 }
 
 impl ProviderError {
+    pub fn issue(&self) -> Issue {
+        use credentials::CredentialError;
+        let kind = match self {
+            Self::Credential(CredentialError::ClaudeSignIn | CredentialError::CodexSignIn) => {
+                IssueKind::SignIn
+            }
+            Self::Credential(CredentialError::Unreadable) => IssueKind::CredentialAccess,
+            Self::Credential(_) => IssueKind::Configuration,
+            Self::Authentication => IssueKind::Authentication,
+            Self::AccessDenied { .. } => IssueKind::AccessDenied,
+            Self::Network => IssueKind::Network,
+            Self::RateLimited { .. } => IssueKind::RateLimited,
+            Self::Service { .. } => IssueKind::Service,
+            Self::Response(_) => IssueKind::Response,
+        };
+        Issue {
+            kind,
+            message: self.to_string(),
+        }
+    }
+
     pub fn retry_at(&self) -> Option<i64> {
         match self {
             Self::AccessDenied { retry_at }
@@ -270,5 +312,46 @@ mod tests {
         let unauthorized = response_error(StatusCode::UNAUTHORIZED, None).unwrap();
         assert!(unauthorized.requires_sign_in());
         assert!(response_error(StatusCode::OK, None).is_none());
+    }
+
+    #[test]
+    fn connection_actions_follow_error_kinds_instead_of_error_text() {
+        for (error, expected) in [
+            (ProviderError::Authentication, IssueKind::Authentication),
+            (
+                ProviderError::Credential(credentials::CredentialError::ClaudeSignIn),
+                IssueKind::SignIn,
+            ),
+            (
+                ProviderError::Credential(credentials::CredentialError::Unreadable),
+                IssueKind::CredentialAccess,
+            ),
+            (
+                ProviderError::Credential(credentials::CredentialError::CodexStorage),
+                IssueKind::Configuration,
+            ),
+            (ProviderError::Network, IssueKind::Network),
+            (
+                ProviderError::RateLimited { retry_at: None },
+                IssueKind::RateLimited,
+            ),
+            (
+                ProviderError::AccessDenied { retry_at: None },
+                IssueKind::AccessDenied,
+            ),
+            (
+                ProviderError::Service {
+                    status: 503,
+                    retry_at: None,
+                },
+                IssueKind::Service,
+            ),
+            (
+                ProviderError::Response("invalid JSON".into()),
+                IssueKind::Response,
+            ),
+        ] {
+            assert_eq!(error.issue().kind, expected);
+        }
     }
 }

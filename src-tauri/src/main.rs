@@ -19,12 +19,35 @@ fn refresh_usage(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn reconnect_provider(
+    app: tauri::AppHandle,
+    provider: model::ProviderId,
+    action: platform::auth::Action,
+) -> Result<(), String> {
+    runtime::request_reconnect(&app, provider, action)
+}
+
+#[tauri::command]
+fn cancel_reconnect(app: tauri::AppHandle, provider: model::ProviderId) -> Result<(), String> {
+    runtime::cancel_reconnect(&app, provider)
+}
+
+#[tauri::command]
+fn set_provider_enabled(
+    app: tauri::AppHandle,
+    provider: model::ProviderId,
+    enabled: bool,
+) -> Result<(), String> {
+    runtime::set_provider_enabled(&app, provider, enabled)
+}
+
+#[tauri::command]
 fn save_settings(
     app: tauri::AppHandle,
     settings: settings::Settings,
 ) -> Result<runtime::AppState, String> {
     let view = app.state::<runtime::Runtime>().save(settings)?;
-    runtime::publish(&app, &view);
+    runtime::publish(&app);
     Ok(view)
 }
 
@@ -41,7 +64,7 @@ fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), 
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
-    app.exit(0);
+    runtime::request_quit(&app);
 }
 
 fn main() -> tauri::Result<()> {
@@ -51,6 +74,9 @@ fn main() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             get_state,
             refresh_usage,
+            reconnect_provider,
+            cancel_reconnect,
+            set_provider_enabled,
             save_settings,
             hide_popover,
             resize_popover,
