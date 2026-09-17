@@ -3,6 +3,7 @@ compile_error!("Delta-V currently supports macOS only.");
 
 pub mod auth;
 mod claude_auth;
+pub mod login_item;
 
 use std::{
     ffi::c_void,

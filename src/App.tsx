@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppState, Amount, IssueKind, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
+import { Startup, useLoginItem } from "./Startup";
 
 const native = isTauri();
 const preview = import.meta.env.DEV && !native;
@@ -529,12 +530,13 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   );
 }
 
-function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
+function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
   state: AppState;
   saving: boolean;
   now: number;
   pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
   pendingConnection: Partial<Record<ProviderId, boolean>>;
+  login: ReturnType<typeof useLoginItem>;
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
   onThemePreview: (theme: Theme | null) => void;
@@ -653,6 +655,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
         <button className="text-button" onClick={onClose} disabled={saving}>Cancel</button>
         <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? "Saving" : "Save settings"}</button>
       </div>
+      <Startup login={login} mode="settings" dismissed={state.settings.launch_at_login_prompt_dismissed} />
       <section className="accounts-settings" aria-label="Accounts">
         <h3>Accounts</h3>
         <p>Changes here apply immediately. Disconnect stops usage checks in Delta-V. It does not sign you out of Claude Code or Codex.</p>
@@ -689,6 +692,12 @@ export default function App() {
   const previewTimers = useRef<Partial<Record<ProviderId, number>>>({});
   const selection = state?.settings.providers ?? "both";
   const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
+  const dismissStartupPrompt = useCallback(() => {
+    setState((current) => current ? {
+      ...current, settings: { ...current.settings, launch_at_login_prompt_dismissed: true },
+    } : current);
+  }, []);
+  const login = useLoginItem(dismissStartupPrompt);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
@@ -771,12 +780,14 @@ export default function App() {
     setSaving(true);
     try {
       if (preview) setState((current) => current ? {
-        ...current, settings: { ...settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled },
+        ...current, settings: { ...settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
+          launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed },
       } : current);
       else {
         const saved = await invoke<AppState>("save_settings", { settings });
         setState((current) => current ? {
-          ...current, settings: { ...saved.settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled },
+          ...current, settings: { ...saved.settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
+            launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed },
           settings_error: saved.settings_error,
         } : saved);
       }
@@ -987,12 +998,13 @@ export default function App() {
           {error && <div className="notice global-error" role="alert">{error}</div>}
           {settingsOpen && state ? (
             <SettingsPanel key={selection} state={state} saving={saving} now={now} onSave={saveSettings}
-              pendingRecovery={pendingRecovery} pendingConnection={pendingConnection}
+              pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
               onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
               onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
           ) : state ? (
             <>
+              <Startup login={login} mode="prompt" dismissed={state.settings.launch_at_login_prompt_dismissed} />
               <div id="provider-limits" className={`provider-grid${selection === "both" ? " two-providers" : ""}`}>
                 {displayedProviders.map((provider) => (
                   <ProviderColumn

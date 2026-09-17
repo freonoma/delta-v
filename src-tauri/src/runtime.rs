@@ -80,7 +80,13 @@ impl Runtime {
     pub fn new() -> Result<Self, reqwest::Error> {
         let (settings, settings_error) = match settings::load() {
             Ok(settings) => (settings, None),
-            Err(error) => (Settings::default(), Some(error.to_string())),
+            Err(error) => (
+                Settings {
+                    launch_at_login_prompt_dismissed: true,
+                    ..Settings::default()
+                },
+                Some(error.to_string()),
+            ),
         };
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -116,11 +122,9 @@ impl Runtime {
             .map_err(|_| "Could not read the app state.".to_owned())
     }
 
-    pub fn save(&self, mut settings: Settings) -> Result<AppState, String> {
+    pub fn save(&self, settings: Settings) -> Result<AppState, String> {
         let mut inner = self.inner.lock().map_err(|_| "Could not save settings.")?;
-        // Account actions take effect immediately, independently of an open settings draft.
-        settings.claude_enabled = inner.view.settings.claude_enabled;
-        settings.codex_enabled = inner.view.settings.codex_enabled;
+        let settings = merge_settings_draft(settings, &inner.view.settings);
         settings::save(&settings).map_err(|error| error.to_string())?;
         for (index, provider) in PROVIDERS.into_iter().enumerate() {
             if inner.view.settings.providers.includes(provider)
@@ -141,6 +145,34 @@ impl Runtime {
         self.wake.notify_one();
         Ok(view)
     }
+}
+
+fn merge_settings_draft(mut draft: Settings, current: &Settings) -> Settings {
+    // Immediate actions must survive saving an older settings draft.
+    draft.claude_enabled = current.claude_enabled;
+    draft.codex_enabled = current.codex_enabled;
+    draft.launch_at_login_prompt_dismissed = current.launch_at_login_prompt_dismissed;
+    draft
+}
+
+pub fn dismiss_launch_at_login_prompt(app: &AppHandle) -> Result<(), String> {
+    let runtime = app.state::<Runtime>();
+    {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not save the launch-at-login choice.")?;
+        if inner.view.settings.launch_at_login_prompt_dismissed {
+            return Ok(());
+        }
+        let mut settings = inner.view.settings.clone();
+        settings.launch_at_login_prompt_dismissed = true;
+        settings::save(&settings).map_err(|error| error.to_string())?;
+        inner.view.settings = settings;
+        inner.view.settings_error = None;
+    }
+    publish(app);
+    Ok(())
 }
 
 pub fn request_refresh(app: &AppHandle) {
@@ -989,6 +1021,39 @@ fn publish_view(app: &AppHandle, view: &AppState) {
 mod tests {
     use super::*;
     use crate::model::Limit;
+
+    #[test]
+    fn saving_an_open_draft_preserves_immediate_choices() {
+        let draft = Settings {
+            threshold: 15,
+            refresh_seconds: 120,
+            ..Settings::default()
+        };
+        let current = Settings {
+            claude_enabled: false,
+            codex_enabled: false,
+            launch_at_login_prompt_dismissed: true,
+            ..Settings::default()
+        };
+
+        let saved = merge_settings_draft(draft, &current);
+        assert!(!saved.claude_enabled);
+        assert!(!saved.codex_enabled);
+        assert!(saved.launch_at_login_prompt_dismissed);
+        assert_eq!(saved.threshold, 15);
+        assert_eq!(saved.refresh_seconds, 120);
+
+        let stale = Settings {
+            claude_enabled: false,
+            codex_enabled: false,
+            launch_at_login_prompt_dismissed: true,
+            ..Settings::default()
+        };
+        let saved = merge_settings_draft(stale, &Settings::default());
+        assert!(saved.claude_enabled);
+        assert!(saved.codex_enabled);
+        assert!(!saved.launch_at_login_prompt_dismissed);
+    }
 
     fn inner() -> Inner {
         Inner {

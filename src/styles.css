@@ -206,6 +206,21 @@ h1, h2, p { margin: 0; }
 .settings-panel { padding: 3px 14px 14px; }
 .settings-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .settings-heading h2 { font-size: 13px; font-weight: 600; }
+.startup-prompt { margin: 0 12px 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.startup-prompt h2 { font-size: 12px; font-weight: 600; }
+.startup-prompt > p { margin-top: 5px; color: var(--secondary); font-size: 10px; line-height: 1.5; max-width: 390px; }
+.startup-actions { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin-top: 9px; }
+.startup-actions .text-button, .startup-actions .primary-button { font-size: 10px; padding: 6px 9px; }
+.startup-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.startup-settings h3 { margin: 0 0 10px; font-size: 11px; font-weight: 550; }
+.startup-setting-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; font-size: 11px; }
+.startup-setting-row p { margin-top: 4px; font-size: 9px; line-height: 1.5; color: var(--secondary); }
+.startup-switch { flex-shrink: 0; width: 30px; height: 18px; border: 1px solid var(--muted); border-radius: 10px; padding: 2px; background: var(--track); }
+.startup-switch span { display: block; height: 12px; width: 12px; border-radius: 50%; background: var(--secondary); transition: transform 120ms ease; }
+.startup-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.startup-switch[aria-checked="true"] span { transform: translateX(12px); background: var(--surface); }
+.startup-caption { margin-top: 7px; color: var(--muted); font-size: 9px; }
+.startup-prompt > .startup-error, .startup-error { color: var(--warning); margin-top: 7px; font-size: 10px; line-height: 1.5; }
 .accounts-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .accounts-settings > h3 { margin: 0; font-size: 11px; font-weight: 550; }
 .accounts-settings > p { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }

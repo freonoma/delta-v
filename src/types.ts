@@ -16,6 +16,7 @@ export interface Settings {
   providers: ProviderSelection;
   claude_enabled: boolean;
   codex_enabled: boolean;
+  launch_at_login_prompt_dismissed: boolean;
   tracked_limit: string;
   threshold: number;
   refresh_seconds: number;
@@ -23,6 +24,11 @@ export interface Settings {
   percentage_mode: PercentageMode;
   claude_windows: string[];
   codex_windows: string[];
+}
+
+export interface LoginItemState {
+  status: "disabled" | "enabled" | "approval_required" | "unavailable";
+  reason: string | null;
 }
 
 export interface Amount {

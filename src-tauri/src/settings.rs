@@ -46,6 +46,8 @@ pub struct Settings {
     pub providers: ProviderSelection,
     pub claude_enabled: bool,
     pub codex_enabled: bool,
+    #[serde(default = "dismiss_prompt_for_existing_settings")]
+    pub launch_at_login_prompt_dismissed: bool,
     pub tracked_limit: String,
     pub threshold: u8,
     pub refresh_seconds: u64,
@@ -61,6 +63,7 @@ impl Default for Settings {
             providers: ProviderSelection::Both,
             claude_enabled: true,
             codex_enabled: true,
+            launch_at_login_prompt_dismissed: false,
             tracked_limit: "auto".into(),
             threshold: 20,
             refresh_seconds: 60,
@@ -70,6 +73,10 @@ impl Default for Settings {
             codex_windows: Vec::new(),
         }
     }
+}
+
+fn dismiss_prompt_for_existing_settings() -> bool {
+    true
 }
 
 #[derive(Debug, Error)]
@@ -199,6 +206,24 @@ mod tests {
         assert!(settings.codex_windows.is_empty());
         assert!(settings.claude_enabled);
         assert!(settings.codex_enabled);
+        assert!(settings.launch_at_login_prompt_dismissed);
+    }
+
+    #[test]
+    fn launch_at_login_prompt_is_only_new_for_a_fresh_install() {
+        assert!(!Settings::default().launch_at_login_prompt_dismissed);
+        let legacy: Settings = toml::from_str("").unwrap();
+        assert!(legacy.launch_at_login_prompt_dismissed);
+
+        for dismissed in [false, true] {
+            let settings = Settings {
+                launch_at_login_prompt_dismissed: dismissed,
+                ..Settings::default()
+            };
+            let saved = toml::to_string(&settings).unwrap();
+            let restored: Settings = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.launch_at_login_prompt_dismissed, dismissed);
+        }
     }
 
     #[test]

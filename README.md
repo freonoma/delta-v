@@ -26,6 +26,8 @@ The first two commands build `Delta-V.app` for your Mac. The last command opens 
 
 Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock. You can close Terminal once it is running. To quit, click ΔV, then **Quit**. Open it again from Applications.
 
+On a fresh install, the first time you click ΔV, it asks whether to launch at login. Choose **Enable** or **Not now**. You can change this later under **Settings → Startup**.
+
 The `APPLE_SIGNING_IDENTITY=-` setting gives this local build an ad-hoc signature, which does not require an Apple Developer account. A Developer ID-signed and notarized download is still planned. To update a source build, rebuild it, quit the installed copy, and replace it in Applications.
 
 ## Connect your accounts
@@ -71,6 +73,8 @@ The percentages and bar fill change colour when less than 20% remains. When show
 
 **Appearance** offers Light, Dark, or System, which follows your Mac's appearance. Changes preview immediately. **Save settings** keeps them; **Cancel** or closing the panel restores the saved appearance.
 
+**Settings → Startup → Launch at login** opens Delta-V quietly in the menu bar when you log in to your Mac. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
+
 <img src="screenshots/settings.png" alt="Delta-V settings for per-provider windows, menu bar tracking, percentage display, threshold, refresh interval, and appearance" width="560">
 
 Usage updates automatically. **Check now** requests the latest reading; it cannot reset or replenish your allowance.
@@ -97,7 +101,7 @@ Renewal stays with the official client. For Claude, Delta-V uses its built-in `/
 
 **Does it start when I log in to my Mac?**
 
-Not yet. This build needs to be started manually.
+Only if you enable **Launch at login**, either from the first-run prompt or in **Settings → Startup**. Run the installed app from **Applications** or your home folder's **Applications** folder to use this option. Turning it off prevents future login launches without quitting the running app.
 
 ## Where the numbers come from
 
@@ -155,6 +159,8 @@ Claude's sign-in actions require absolute custom directory paths. Remove empty d
 
 Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. It does not write a usage history or a separate copy of your credentials.
 
+Launch at login uses macOS's login-item service. Delta-V registers or unregisters its installed app only when you ask. macOS stores that setting; Delta-V saves only whether you dismissed the first-run prompt in its configuration file.
+
 Sign-in helpers use a private `delta-v-auth-*` folder in the macOS temporary directory, removed when the action finishes. The official clients still use their own account storage and may update their own configuration, caches, and logs. Delta-V does not keep their terminal output.
 
 </details>
@@ -178,12 +184,14 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
 
+Launch at login is managed by macOS, so it has no on/off value in this file. `launch_at_login_prompt_dismissed` records whether the first-run choice has been handled. It starts as `false` on new installs; existing configuration files without this field skip the prompt.
+
 ## Roadmap
 
 - [x] Build and run from source on macOS.
 - [ ] Offer a signed, notarized `.dmg` download that installs into Applications.
 - [ ] Add a Homebrew cask for installation and updates.
-- [ ] Add Launch at login to Settings.
+- [x] Offer Launch at login during setup and in Settings.
 - [ ] Show today's usage and the last seven days, with history stored on your Mac.
 
 Under consideration: API usage and spending in a separate view. API billing would need its own data sources and account setup, and would stay separate from subscription allowances.

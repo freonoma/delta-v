@@ -49,6 +49,45 @@ async fn open_setup_instructions(provider: model::ProviderId) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn get_login_item_state() -> Result<platform::login_item::LoginItemState, String> {
+    tokio::task::spawn_blocking(|| platform::login_item::state().map_err(|error| error.to_string()))
+        .await
+        .map_err(|_| "Could not read the launch-at-login setting. Please try again.".to_owned())?
+}
+
+#[tauri::command]
+async fn set_launch_at_login(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<platform::login_item::LoginItemState, String> {
+    tokio::task::spawn_blocking(move || {
+        let state =
+            platform::login_item::set_enabled(enabled).map_err(|error| error.to_string())?;
+        runtime::dismiss_launch_at_login_prompt(&app).map_err(|_| {
+            "The macOS setting changed, but Delta-V could not save your choice. Please try again."
+                .to_owned()
+        })?;
+        Ok(state)
+    })
+    .await
+    .map_err(|_| "Could not change launch at login. Please try again.".to_owned())?
+}
+
+#[tauri::command]
+fn dismiss_launch_at_login_prompt(app: tauri::AppHandle) -> Result<(), String> {
+    runtime::dismiss_launch_at_login_prompt(&app)
+}
+
+#[tauri::command]
+async fn open_login_item_settings() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| {
+        platform::login_item::open_settings().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Could not open Login Items. Open System Settings and try again.".to_owned())?
+}
+
+#[tauri::command]
 fn save_settings(
     app: tauri::AppHandle,
     settings: settings::Settings,
@@ -85,6 +124,10 @@ fn main() -> tauri::Result<()> {
             cancel_reconnect,
             set_provider_enabled,
             open_setup_instructions,
+            get_login_item_state,
+            set_launch_at_login,
+            dismiss_launch_at_login_prompt,
+            open_login_item_settings,
             save_settings,
             hide_popover,
             resize_popover,

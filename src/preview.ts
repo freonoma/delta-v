@@ -1,4 +1,11 @@
-import type { AppState, Limit, ProviderId, ProviderIssue, ProviderState } from "./types";
+import type { AppState, Limit, LoginItemState, ProviderId, ProviderIssue, ProviderState } from "./types";
+
+export function createLoginItemPreview(search: string): LoginItemState {
+  const status = new URLSearchParams(search).get("startup");
+  if (status === "enabled" || status === "approval_required") return { status, reason: null };
+  if (status === "unavailable") return { status, reason: "Move Delta-V to Applications and open it from there to use launch at login." };
+  return { status: "disabled", reason: null };
+}
 
 const previewIssues: ProviderIssue[] = [
   { kind: "sign_in", message: "No saved CLI sign-in was found." },
@@ -35,7 +42,7 @@ export function createPreview(search = ""): AppState {
   };
 
   return {
-    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: "system", percentage_mode: "remaining", claude_windows: [], codex_windows: [] },
+    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: "system", percentage_mode: "remaining", claude_windows: [], codex_windows: [] },
     providers: [
       provider("claude", [
         quota("session", "5-hour", 0.36, 18000, 8120),
