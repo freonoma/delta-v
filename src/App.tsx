@@ -8,9 +8,13 @@ const native = isTauri();
 const preview = import.meta.env.DEV && !native;
 const providerNames: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 const clientNames: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
+const setupUrls: Record<ProviderId, string> = {
+  claude: "https://code.claude.com/docs/en/quickstart",
+  codex: "https://learn.chatgpt.com/docs/codex/cli",
+};
 const issueStatuses: Record<IssueKind, string> = {
   sign_in: "Sign in needed", authentication: "Sign in needed", recovery: "Sign in needed",
-  credential_access: "Access needed", configuration: "Setup needed", client_missing: "CLI needed",
+  credential_access: "Access needed", configuration: "Setup needed", client_missing: "Setup needed",
   access_denied: "Access denied", network: "Unavailable", rate_limited: "Waiting",
   service: "Unavailable", response: "Unavailable",
 };
@@ -34,10 +38,40 @@ function providerEnabled(settings: Settings, provider: ProviderId): boolean {
 
 function signInBlocked(provider: ProviderState, now: number): boolean {
   const kind = provider.error?.kind;
+  const signInIssue = kind === "authentication" || kind === "sign_in" || kind === "recovery" || kind === "client_missing";
   return provider.refreshing || provider.recovery !== null
-    || (kind !== undefined && kind !== "authentication" && kind !== "sign_in" && kind !== "recovery")
-    || (provider.next_retry_at !== null && provider.next_retry_at > now
-      && kind !== "authentication" && kind !== "sign_in" && kind !== "recovery");
+    || (kind !== undefined && !signInIssue)
+    || (provider.next_retry_at !== null && provider.next_retry_at > now && !signInIssue);
+}
+
+function SetupInstructions({ provider }: { provider: ProviderId }) {
+  const [opening, setOpening] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  async function open() {
+    if (opening) return;
+    setOpening(true);
+    setFailure(null);
+    try { await invoke("open_setup_instructions", { provider }); }
+    catch (caught: unknown) { setFailure(errorMessage(caught)); }
+    finally { setOpening(false); }
+  }
+
+  return (
+    <div className="setup-instructions">
+      <a className="setup-link" href={setupUrls[provider]} target="_blank" rel="noopener noreferrer"
+        aria-label={`${clientNames[provider]} setup instructions (opens in browser)`} aria-disabled={opening}
+        onClick={(event) => {
+          if (native) {
+            event.preventDefault();
+            void open();
+          }
+        }}>
+        {opening ? "Opening instructions" : `${clientNames[provider]} setup`}<Icon name="external" />
+      </a>
+      {failure && <p className="setup-error" role="alert">{failure}</p>}
+    </div>
+  );
 }
 
 function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
@@ -139,7 +173,7 @@ function amountDescription(amount: Amount): string | null {
   return null;
 }
 
-function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron"; spinning?: boolean }) {
+function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external"; spinning?: boolean }) {
   return (
     <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
@@ -148,6 +182,7 @@ function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit
       {name === "clock" && <><circle cx="10" cy="10" r="6.5" /><path d="M10 6v4l2.6 1.5" /></>}
       {name === "close" && <path d="m5 5 10 10M15 5 5 15" />}
       {name === "chevron" && <path d="m6 8 4 4 4-4" />}
+      {name === "external" && <><path d="M11 3h6v6m0-6L8 12" /><path d="M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" /></>}
     </svg>
   );
 }
@@ -257,28 +292,31 @@ function ProviderFeedback({ provider, recovery, now, onReconnect, onCancel, show
   const issue = provider.error;
   if (!issue) return null;
   const canReconnect = issue.kind === "authentication" || issue.kind === "recovery";
-  const needsSignIn = issue.kind === "sign_in";
+  const needsSignIn = issue.kind === "sign_in" || issue.kind === "client_missing";
   let help: string | null = null;
-  if (canReconnect || needsSignIn) {
+  if (issue.kind === "sign_in") {
     help = provider.id === "claude"
-      ? "Claude Desktop alone does not connect Delta-V. This uses the standalone Claude Code CLI."
-      : "Uses the Codex CLI sign-in for your ChatGPT account.";
+      ? "Sign in with your Claude subscription. Delta-V needs the standalone Claude Code terminal app. Claude Desktop alone does not connect it."
+      : "Sign in with your ChatGPT account. Delta-V can use the Codex client included with the ChatGPT or Codex Mac app, or a separate Codex CLI installation.";
   } else if (issue.kind === "client_missing") {
-    help = provider.id === "codex"
-      ? "Install or update ChatGPT, Codex, or the official Codex CLI. The README’s “Connect your accounts” section has the steps."
-      : "Install the official Claude Code CLI. The README’s “Connect your accounts” section has the steps.";
+    help = provider.id === "claude"
+      ? "Install or update the standalone Claude Code terminal app, then sign in here. Claude Desktop alone does not connect Delta-V."
+      : "Update the ChatGPT or Codex Mac app, or install Codex CLI, then return here to sign in with your ChatGPT account.";
+  } else if (canReconnect) {
+    help = `Reconnect tries your saved ${clientNames[provider.id]} sign-in. Sign in again to connect another account.`;
   } else if (issue.kind === "credential_access") {
     help = "Check file and Keychain access for the CLI’s saved sign-in. The README lists the locations Delta-V reads.";
   } else if (issue.kind === "configuration") {
     help = "See “Connect your accounts” in the README for setup steps.";
   }
   return (
-    <div className="notice error-notice" role="status">
+    <div className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
       <p>{issue.message}</p>
       {help && <p className="recovery-help">{help}</p>}
+      {(needsSignIn || canReconnect) && <SetupInstructions provider={provider.id} />}
       {showActions && (needsSignIn || canReconnect) && !confirmSignIn && (
         <div className="recovery-actions">
-          <button className="primary-button" disabled={provider.refreshing} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
+          <button className="primary-button" disabled={signInBlocked(provider, now)} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
             {needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Reconnect"}
           </button>
           {canReconnect && <button className="text-button" disabled={signInBlocked(provider, now)} onClick={() => setConfirmSignIn(true)}>Sign in again</button>}
@@ -289,7 +327,7 @@ function ProviderFeedback({ provider, recovery, now, onReconnect, onCancel, show
         onReconnect(provider.id, "sign_in");
       }} onCancel={() => setConfirmSignIn(false)} />}
       {provider.next_retry_at !== null && provider.next_retry_at > now && (
-        <p className="retry-time">Retry in {shortDuration(provider.next_retry_at - now)}</p>
+        <p className="retry-time">{needsSignIn || canReconnect ? "Next check" : "Retry"} in {shortDuration(provider.next_retry_at - now)}</p>
       )}
     </div>
   );
@@ -459,6 +497,7 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
     : provider.refreshing ? "Checking usage" : provider.error ? issueStatuses[provider.error.kind]
     : provider.snapshot ? "Connected" : "Ready to check";
   const canReconnect = provider.error?.kind === "authentication" || provider.error?.kind === "recovery";
+  const needsSignIn = provider.error?.kind === "sign_in" || provider.error?.kind === "client_missing";
   const signInDisabled = paused || pending || recovery !== null || signInBlocked(provider, now);
   return (
     <div className="account-row" role="group" aria-label={`${providerNames[provider.id]} connection`} aria-busy={pending || recovery !== null}>
@@ -476,7 +515,7 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
       {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} showActions={false} />}
       {enabled && !recovery && !confirmSignIn && <div className="account-actions">
         {canReconnect && <button className="text-button" disabled={signInDisabled} onClick={() => onReconnect(provider.id, "renew")}>Reconnect</button>}
-        <button className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>Sign in again</button>
+        <button className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>{needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Sign in again"}</button>
       </div>}
       {enabled && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInDisabled} onContinue={() => {
         setConfirmSignIn(false);

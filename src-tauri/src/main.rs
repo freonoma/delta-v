@@ -42,6 +42,13 @@ fn set_provider_enabled(
 }
 
 #[tauri::command]
+async fn open_setup_instructions(provider: model::ProviderId) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || platform::open_setup_instructions(provider))
+        .await
+        .map_err(|_| "Could not open the setup instructions. Please try again.".to_owned())?
+}
+
+#[tauri::command]
 fn save_settings(
     app: tauri::AppHandle,
     settings: settings::Settings,
@@ -77,6 +84,7 @@ fn main() -> tauri::Result<()> {
             reconnect_provider,
             cancel_reconnect,
             set_provider_enabled,
+            open_setup_instructions,
             save_settings,
             hide_popover,
             resize_popover,

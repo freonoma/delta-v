@@ -41,6 +41,10 @@ Delta-V uses the sign-in saved by each provider's terminal app, also called a CL
 
 Click ΔV and select **Claude**, **Codex**, or **Both**. If you need to connect, the sign-in button starts the official client. You never paste a password or token into Delta-V. macOS may ask for Keychain access to read the saved sign-in.
 
+If the required app is missing or needs an update, choose **Claude Code setup** or **Codex setup** in the provider's card. This opens the provider's instructions in your browser. After installing or updating, return to Delta-V and choose **Sign in with Claude Code** or **Sign in with Codex**. You do not need to restart Delta-V. These controls are also available under **Settings → Accounts**, even for a provider hidden by the picker.
+
+If you finish signing in directly in the terminal app, choose **Check now** in Delta-V to read the saved sign-in. No coding task or model prompt is needed.
+
 Signing in on claude.ai or chatgpt.com alone does not connect Delta-V. Claude Desktop's Code tab also has a separate sign-in path, so Claude Code still needs to be installed. API-key, Claude Console, and third-party cloud-provider billing are not supported.
 
 You can also sign in yourself in Terminal: run `claude auth login` for Claude, or `codex login` for Codex, then choose **Check now** in Delta-V. See the [Claude](https://code.claude.com/docs/en/authentication) and [Codex](https://learn.chatgpt.com/docs/auth) sign-in guides for account requirements.

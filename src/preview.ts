@@ -10,7 +10,7 @@ const previewIssues: ProviderIssue[] = [
   { kind: "rate_limited", message: "The usage service asked us to wait before checking again." },
   { kind: "service", message: "The usage service returned an error (503)." },
   { kind: "response", message: "The usage response could not be read." },
-  { kind: "client_missing", message: "The official CLI could not be found on this Mac." },
+  { kind: "client_missing", message: "The required sign-in app is missing or needs an update." },
   { kind: "recovery", message: "The CLI could not finish reconnecting." },
 ];
 
@@ -18,7 +18,7 @@ export function createPreview(search = ""): AppState {
   const now = Math.floor(Date.now() / 1000);
   const parameters = new URLSearchParams(search);
   const issue = previewIssues.find((candidate) => candidate.kind === parameters.get("issue"));
-  const issueProvider: ProviderId = parameters.get("provider") === "codex" ? "codex" : "claude";
+  const issueProvider = parameters.get("provider") ?? "claude";
   const disconnected = parameters.get("disconnected");
   const quota = (id: string, label: string, used: number, duration: number, reset: number): Limit => ({
     id, label, kind: "quota", used_fraction: used, window_seconds: duration,
@@ -26,7 +26,7 @@ export function createPreview(search = ""): AppState {
   });
   const provider = (id: ProviderId, limits: Limit[], plan: string): ProviderState => {
     const enabled = disconnected !== id && disconnected !== "both";
-    const error = enabled && id === issueProvider ? issue ?? null : null;
+    const error = enabled && (id === issueProvider || issueProvider === "both") ? issue ?? null : null;
     return {
       id, snapshot: error || !enabled ? null : { provider: id, limits, plan, fetched_at: now - 24, warnings: [] },
       error, recovery: null, refreshing: false, stale: error !== null,

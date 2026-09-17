@@ -15,10 +15,14 @@ use std::{
 
 use tauri::{AppHandle, Emitter, Manager, tray::TrayIconEvent};
 use tauri_nspanel::{
-    CollectionBehavior, ManagerExt, StyleMask, WebviewWindowExt, objc2_app_kit::NSFont,
-    objc2_foundation::NSString, tauri_panel,
+    CollectionBehavior, ManagerExt, StyleMask, WebviewWindowExt,
+    objc2_app_kit::{NSFont, NSWorkspace},
+    objc2_foundation::{NSString, NSURL},
+    tauri_panel,
 };
 use tauri_plugin_positioner::{Position, WindowExt};
+
+use crate::model::ProviderId;
 
 const WINDOW: &str = "main";
 const TRAY: &str = "main";
@@ -269,6 +273,22 @@ pub fn normalize_nfc(value: &str) -> String {
         NSString::from_str(value)
             .precomposedStringWithCanonicalMapping()
             .to_string()
+    })
+}
+
+pub fn open_setup_instructions(provider: ProviderId) -> Result<(), String> {
+    let address = match provider {
+        ProviderId::Claude => "https://code.claude.com/docs/en/quickstart",
+        ProviderId::Codex => "https://learn.chatgpt.com/docs/codex/cli",
+    };
+    tauri_nspanel::objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::URLWithString(&NSString::from_str(address))
+            .ok_or_else(|| "Could not open the setup instructions.".to_owned())?;
+        if NSWorkspace::sharedWorkspace().openURL(&url) {
+            Ok(())
+        } else {
+            Err("Could not open your browser. Please try again.".to_owned())
+        }
     })
 }
 
