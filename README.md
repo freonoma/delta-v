@@ -12,7 +12,7 @@ Delta-V needs macOS 13.3 or newer. The first download is for **Apple silicon Mac
 
 ### Download
 
-1. Open the [releases page](https://github.com/freonoma/delta-v/releases) and download the `.dmg` file under **Assets**. If no release is listed yet, use [Build from source](#build-from-source) below.
+1. Open the [releases page](https://github.com/freonoma/delta-v/releases) and download the `.dmg` file under **Assets**.
 2. Quit any running copy of Delta-V by clicking **ΔV → Quit** in the menu bar.
 3. Double-click the downloaded `.dmg`, then drag **Delta-V** onto **Applications** in the window that opens. Choose **Replace** if an older copy is already installed.
 4. Eject the Delta-V disk image in Finder, then open **Delta-V from Applications**. If macOS asks whether to open an app downloaded from the internet, choose **Open**.
@@ -204,7 +204,7 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 ## Roadmap
 
 - [x] Build and run from source on macOS.
-- [ ] Offer a signed, notarized `.dmg` download that installs into Applications.
+- [x] Offer a signed, notarized `.dmg` download that installs into Applications.
 - [ ] Add a Homebrew cask for installation and updates.
 - [x] Offer Launch at login during setup and in Settings.
 - [ ] Show today's usage and the last seven days, with history stored on your Mac.
