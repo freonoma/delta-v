@@ -71,6 +71,29 @@ The two live provider tests are optional. They read your saved CLI sign-ins and 
 cargo test --manifest-path src-tauri/Cargo.toml --locked live_ -- --ignored --test-threads=1
 ```
 
+## Building a disk image
+
+To check the installer locally, run:
+
+```sh
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build -- --locked
+```
+
+This builds for your Mac's architecture and produces both `Delta-V.app` and a `.dmg` in `src-tauri/target/release/bundle/`, under `macos/` and `dmg/` respectively. Open the disk image in Finder to check the app icon and Applications shortcut.
+
+This local build uses an ad-hoc signature and is not notarized. Public downloads need Developer ID signing and Apple notarization before release.
+
+## Publishing a release
+
+For maintainers, the release order is:
+
+1. Run the checks above and confirm that `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version. Prepare the README and release notes, then commit the changes intended for release.
+2. Build for the intended architecture. The first download targets Apple silicon (`aarch64-apple-darwin`). Sign the app and DMG with a **Developer ID Application** certificate, then submit the DMG to Apple for notarization. Follow the [Tauri signing guide](https://v2.tauri.app/distribute/sign/macos/) for signing setup. Keep signing credentials outside the repository.
+3. Check Apple's notarization log, staple the accepted ticket to the DMG, and verify the signatures and Gatekeeper acceptance of both the DMG and its enclosed app. Generate the `.dmg.sha256` checksum after stapling, since stapling changes the file.
+4. Install from that DMG and check normal launch, account connections, saved settings, and launch at login after logging out and back in. Check replacing an older app too. A separate Mac or macOS account helps test a fresh setup. If application code changes, rebuild and repeat signing and verification.
+5. Push the release changes and create a draft GitHub release with a matching tag, such as `v0.1.0`. The tag must contain the application source used for the build. Attach the DMG and checksum under **Attach binaries**, then add release notes with installation steps, supported Macs, and known limitations. Keep build files out of source commits.
+6. Download the attached DMG and checksum through a browser, verify the checksum, and test installation from that downloaded copy. Publish the draft after these checks pass, then mark the downloadable release complete in the README roadmap.
+
 ## Sending a pull request
 
 1. Review your changes and remove unrelated edits or generated build files.

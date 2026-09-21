@@ -8,7 +8,26 @@ The name comes from spaceflight: a finite budget until the next refill.
 
 ## Install
 
-Delta-V is still in development. There is no downloadable release or Homebrew package yet. For now, build the app from source on a Mac running macOS 13.3 or newer.
+Delta-V needs macOS 13.3 or newer. The first download is for **Apple silicon Macs (M1 or newer)**. There is no Intel download or Homebrew package yet.
+
+### Download
+
+1. Open the [releases page](https://github.com/freonoma/delta-v/releases) and download the `.dmg` file under **Assets**. If no release is listed yet, use [Build from source](#build-from-source) below.
+2. Quit any running copy of Delta-V by clicking **ΔV → Quit** in the menu bar.
+3. Double-click the downloaded `.dmg`, then drag **Delta-V** onto **Applications** in the window that opens. Choose **Replace** if an older copy is already installed.
+4. Eject the Delta-V disk image in Finder, then open **Delta-V from Applications**. If macOS asks whether to open an app downloaded from the internet, choose **Open**.
+
+The release DMG is signed with an Apple Developer ID and notarized by Apple.
+
+Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock. Click it to see usage, then follow [Connect your accounts](#connect-your-accounts) if needed.
+
+On a fresh install, the first time you click ΔV, it asks whether to launch at login. Choose **Enable** or **Not now**. You can change this later under **Settings → Startup**.
+
+### Updating
+
+Updates are manual for now. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings in place.
+
+### Build from source
 
 You need [Node.js](https://nodejs.org/en/download) 22.12 or newer, [Rust](https://rust-lang.org/tools/install/), and the [Xcode command line tools](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools) installed.
 
@@ -18,17 +37,13 @@ You need [Node.js](https://nodejs.org/en/download) 22.12 or newer, [Rust](https:
 
 ```sh
 npm ci
-APPLE_SIGNING_IDENTITY=- npm run tauri -- build -- --locked
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build --bundles app -- --locked
 open src-tauri/target/release/bundle/macos
 ```
 
 The first two commands build `Delta-V.app` for your Mac. The last command opens its folder in Finder. Quit any running copy of Delta-V, drag `Delta-V.app` into **Applications**, then double-click it there.
 
-Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock. You can close Terminal once it is running. To quit, click ΔV, then **Quit**. Open it again from Applications.
-
-On a fresh install, the first time you click ΔV, it asks whether to launch at login. Choose **Enable** or **Not now**. You can change this later under **Settings → Startup**.
-
-The `APPLE_SIGNING_IDENTITY=-` setting gives this local build an ad-hoc signature, which does not require an Apple Developer account. A Developer ID-signed and notarized download is still planned. To update a source build, rebuild it, quit the installed copy, and replace it in Applications.
+You can close Terminal once the app is running. The `APPLE_SIGNING_IDENTITY=-` setting gives this local build an ad-hoc signature, which does not require an Apple Developer account. This source build is not notarized. To update it, rebuild, quit the installed copy, and replace it in Applications.
 
 ## Connect your accounts
 
