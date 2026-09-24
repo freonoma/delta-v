@@ -78,6 +78,8 @@ Account actions take effect immediately, without **Save settings**. Cancelling t
 
 Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses which providers you see. **Show more** reveals additional windows, credits, and provider details. Clicking outside closes the panel; the next opening starts compact again.
 
+Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes settings or expanded details first, then hides the panel. Pinning lasts until you quit Delta-V.
+
 Under **Settings → Compact view**, choose a first and optional second window for each provider. For example, show Claude's five-hour window alongside its weekly model limit, and choose different windows for Codex. **Automatic** lets Delta-V choose. These settings control the compact rows. Show more always reveals all reported limits the app understands.
 
 Percentages show **remaining** usage by default. A window at 55% used has 45% remaining. Under **Settings → Show percentages as**, choose **Used** if you prefer. This changes the menu bar, the large provider percentages, and the usage bars together.

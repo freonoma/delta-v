@@ -40,6 +40,7 @@ h1, h2, p { margin: 0; }
   --codex: #648b85;
   color-scheme: light;
   width: 340px;
+  max-width: 100vw;
   max-height: min(620px, 100vh);
   display: flex;
   flex-direction: column;
@@ -98,7 +99,17 @@ h1, h2, p { margin: 0; }
   color-scheme: dark;
 }
 
-.app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; flex-shrink: 0; }
+.app-header { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; flex-shrink: 0; }
+.popover-shell[data-pinned="true"] .app-header { cursor: grab; -webkit-user-select: none; user-select: none; }
+.popover-shell[data-pinned="true"] .app-header:active { cursor: grabbing; }
+.header-actions { display: flex; align-items: center; gap: 6px; }
+.pin-button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); }
+.pin-button:hover:not(:disabled) { background: var(--control); color: var(--text); }
+.pin-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.drag-hint { position: absolute; top: calc(100% - 3px); left: 13px; z-index: 2; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 26px); padding: 5px 6px 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); box-shadow: 0 3px 12px #0002; font-size: 11px; pointer-events: none; }
+.drag-hint button { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--secondary); pointer-events: auto; }
+.drag-hint button:hover { background: var(--control); color: var(--text); }
+.drag-hint .icon { width: 14px; height: 14px; }
 .brand { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .brand-mark { width: 28px; height: 22px; color: var(--text); }
 .brand h1 { font-size: 12px; font-weight: 650; letter-spacing: -.2px; }

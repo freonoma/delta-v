@@ -9,7 +9,10 @@ use std::{
     ffi::c_void,
     io::Read,
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -39,6 +42,7 @@ tauri_panel! {
 }
 
 struct PopoverState {
+    pinned: AtomicBool,
     last_blur: Mutex<Option<Instant>>,
     preferred_size: Mutex<(f64, f64)>,
 }
@@ -46,6 +50,7 @@ struct PopoverState {
 impl Default for PopoverState {
     fn default() -> Self {
         Self {
+            pinned: AtomicBool::new(false),
             last_blur: Mutex::new(None),
             preferred_size: Mutex::new((560.0, 360.0)),
         }
@@ -83,6 +88,9 @@ pub fn configure(app: &mut tauri::App) -> tauri::Result<()> {
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Focused(false)) {
+            if popover_pinned(&handle) {
+                return;
+            }
             if let Ok(mut last_blur) = handle.state::<PopoverState>().last_blur.lock() {
                 *last_blur = Some(Instant::now());
             }
@@ -120,10 +128,10 @@ pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
             .ok()
             .and_then(|blur| *blur)
             .is_some_and(|blur| blur.elapsed() < Duration::from_millis(200));
-        if just_blurred {
+        if !popover_pinned(&handle) && just_blurred {
             return;
         }
-        if let Err(error) = position_popover(&handle) {
+        if let Err(error) = position_popover(&handle, popover_pinned(&handle)) {
             eprintln!("Could not position the usage panel: {error}");
         }
         if let Err(error) = handle.emit("popover-reset", ()) {
@@ -145,6 +153,50 @@ pub fn hide_popover(app: &AppHandle) -> tauri::Result<()> {
     })
 }
 
+pub fn popover_pinned(app: &AppHandle) -> bool {
+    app.state::<PopoverState>().pinned.load(Ordering::Relaxed)
+}
+
+pub async fn set_popover_pinned(app: &AppHandle, pinned: bool) -> tauri::Result<bool> {
+    let handle = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            let panel = handle
+                .get_webview_panel(WINDOW)
+                .map_err(|_| tauri::Error::WindowNotFound)?;
+            let state = handle.state::<PopoverState>();
+            if !pinned {
+                // Reattach before changing state so a failed move keeps the panel pinned.
+                position_popover(&handle, false)?;
+            }
+            panel.set_level(if pinned {
+                tauri_nspanel::PanelLevel::Floating.value()
+            } else {
+                tauri_nspanel::PanelLevel::Status.value()
+            });
+            state.pinned.store(pinned, Ordering::Relaxed);
+            if let Ok(mut last_blur) = state.last_blur.lock() {
+                *last_blur = None;
+            }
+            Ok(pinned)
+        })();
+        let _ = sender.send(result);
+    })?;
+    receiver
+        .await
+        .map_err(|_| tauri::Error::Io(std::io::Error::other("Could not change panel pinning")))?
+}
+
+pub fn drag_popover(app: &AppHandle) -> tauri::Result<()> {
+    if !popover_pinned(app) {
+        return Ok(());
+    }
+    app.get_webview_window(WINDOW)
+        .ok_or(tauri::Error::WindowNotFound)?
+        .start_dragging()
+}
+
 pub fn resize_popover(app: &AppHandle, width: f64, height: f64) -> tauri::Result<()> {
     if !width.is_finite() || !height.is_finite() {
         return Err(tauri::Error::Io(std::io::Error::new(
@@ -161,7 +213,7 @@ pub fn resize_popover(app: &AppHandle, width: f64, height: f64) -> tauri::Result
     }
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        if let Err(error) = position_popover(&handle) {
+        if let Err(error) = position_popover(&handle, popover_pinned(&handle)) {
             eprintln!("Could not position the usage panel: {error}");
         }
     })
@@ -186,7 +238,27 @@ fn popover_frame(anchor: NSRect, available: NSRect, requested: NSSize) -> NSRect
     NSRect::new(NSPoint::new(x, top - height), NSSize::new(width, height))
 }
 
-fn position_popover(app: &AppHandle) -> tauri::Result<()> {
+fn floating_frame(current: NSRect, available: NSRect, requested: NSSize) -> NSRect {
+    let margin = 8.0;
+    let width = requested
+        .width
+        .min((available.size.width - 2.0 * margin).max(1.0));
+    let height = requested
+        .height
+        .min((available.size.height - 2.0 * margin).max(1.0));
+    let left = available.origin.x + margin;
+    let bottom = available.origin.y + margin;
+    let right = (available.origin.x + available.size.width - width - margin).max(left);
+    let top = (available.origin.y + available.size.height - margin).max(bottom + height);
+    // AppKit's origin is bottom-left. Keep the top edge still when content grows.
+    let y = (current.origin.y + current.size.height).clamp(bottom + height, top) - height;
+    NSRect::new(
+        NSPoint::new(current.origin.x.clamp(left, right), y),
+        NSSize::new(width, height),
+    )
+}
+
+fn position_popover(app: &AppHandle, pinned: bool) -> tauri::Result<()> {
     let window = app
         .get_webview_window(WINDOW)
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -200,6 +272,11 @@ fn position_popover(app: &AppHandle) -> tauri::Result<()> {
         })?;
         NSSize::new(size.0, size.1)
     };
+    if pinned && let Some(screen) = panel.as_panel().screen() {
+        let frame = floating_frame(panel.as_panel().frame(), screen.visibleFrame(), requested);
+        panel.as_panel().setFrame_display(frame, true);
+        return Ok(());
+    }
     let positioned = if let Some(tray) = app.tray_by_id(TRAY) {
         let panel = panel.clone();
         tray.with_inner_tray_icon(move |tray| {
@@ -445,5 +522,44 @@ mod tests {
             compact.origin.y + compact.size.height,
             expanded.origin.y + expanded.size.height
         );
+    }
+
+    #[test]
+    fn pinned_panel_keeps_its_top_left_when_content_changes() {
+        let available = rect(0.0, 48.0, 1440.0, 826.0);
+        let current = rect(420.0, 500.0, 340.0, 280.0);
+        let expanded = floating_frame(current, available, NSSize::new(560.0, 620.0));
+        assert_eq!(expanded, rect(420.0, 160.0, 560.0, 620.0));
+        assert_eq!(floating_frame(expanded, available, current.size), current);
+    }
+
+    #[test]
+    fn pinned_panel_moves_only_as_far_as_needed_to_fit() {
+        let frame = floating_frame(
+            rect(1000.0, 60.0, 340.0, 280.0),
+            rect(0.0, 48.0, 1440.0, 826.0),
+            NSSize::new(560.0, 620.0),
+        );
+        assert_eq!(frame, rect(872.0, 56.0, 560.0, 620.0));
+    }
+
+    #[test]
+    fn pinned_panel_uses_the_current_display_with_negative_coordinates() {
+        let frame = floating_frame(
+            rect(-950.0, -80.0, 340.0, 280.0),
+            rect(-1280.0, -300.0, 1280.0, 1000.0),
+            NSSize::new(560.0, 420.0),
+        );
+        assert_eq!(frame, rect(-950.0, -220.0, 560.0, 420.0));
+    }
+
+    #[test]
+    fn pinned_panel_fits_a_smaller_screen() {
+        let frame = floating_frame(
+            rect(900.0, 500.0, 560.0, 360.0),
+            rect(0.0, 24.0, 500.0, 516.0),
+            NSSize::new(560.0, 620.0),
+        );
+        assert_eq!(frame, rect(8.0, 32.0, 484.0, 500.0));
     }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppState, Amount, IssueKind, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
 import { Startup, useLoginItem } from "./Startup";
@@ -79,7 +80,8 @@ function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
   provider: ProviderId; disabled: boolean; onContinue: () => void; onCancel: () => void;
 }) {
   return (
-    <div className="sign-in-confirmation" role="group" aria-label={`Sign in with ${clientNames[provider]}`}>
+    <div className="sign-in-confirmation" role="group" aria-label={`Sign in with ${clientNames[provider]}`}
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancel(); } }}>
       <p>This opens {clientNames[provider]}’s sign-in flow. Choosing another account also changes the account saved by {clientNames[provider]} on this Mac.</p>
       <div className="recovery-actions">
         <button className="primary-button" onClick={onContinue} disabled={disabled}>Continue</button>
@@ -174,7 +176,7 @@ function amountDescription(amount: Amount): string | null {
   return null;
 }
 
-function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external"; spinning?: boolean }) {
+function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin"; spinning?: boolean }) {
   return (
     <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
@@ -184,6 +186,7 @@ function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit
       {name === "close" && <path d="m5 5 10 10M15 5 5 15" />}
       {name === "chevron" && <path d="m6 8 4 4 4-4" />}
       {name === "external" && <><path d="M11 3h6v6m0-6L8 12" /><path d="M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" /></>}
+      {name === "pin" && <><path d="M7 3h6m-5 0v5l-3 3v2h10v-2l-3-3V3M10 13v4" /></>}
     </svg>
   );
 }
@@ -678,6 +681,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [showDragHint, setShowDragHint] = useState(false);
+  const [pinPending, setPinPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [keyboardNavigation, setKeyboardNavigation] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<Partial<Record<ProviderId, RecoveryPhase>>>({});
@@ -714,10 +720,19 @@ export default function App() {
     let receivedEvent = false;
     let unlisten: (() => void) | undefined;
     let unlistenOpen: (() => void) | undefined;
+    let unlistenMove: (() => void) | undefined;
+    void getCurrentWindow().onMoved(() => {
+      if (!disposed) setShowDragHint(false);
+    }).then((stop) => { if (disposed) stop(); else unlistenMove = stop; })
+      .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
+    void invoke<boolean>("get_popover_pinned")
+      .then((value) => { if (!disposed) setPinned(value); })
+      .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
         setSettingsOpen(false);
+        setShowDragHint(false);
         setKeyboardNavigation(false);
         window.cancelAnimationFrame(focusFrame.current);
         focusFrame.current = window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
@@ -732,7 +747,7 @@ export default function App() {
       const initial = await invoke<AppState>("get_state");
       if (!disposed && !receivedEvent) setState(initial);
     }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); window.cancelAnimationFrame(focusFrame.current); };
+    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); window.cancelAnimationFrame(focusFrame.current); };
   }, []);
 
   useEffect(() => {
@@ -766,6 +781,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (settingsOpen) { setSettingsOpen(false); return; }
+      if (expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
         setSettingsOpen(false);
@@ -774,7 +791,21 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [settingsOpen, expanded]);
+
+  async function togglePin() {
+    if (pinPending) return;
+    setPinPending(true);
+    try {
+      const value = native ? await invoke<boolean>("set_popover_pinned", { pinned: !pinned }) : !pinned;
+      setPinned(value);
+      setShowDragHint(value);
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+    } finally {
+      setPinPending(false);
+    }
+  }
 
   const saveSettings = useCallback(async (settings: Settings) => {
     setSaving(true);
@@ -958,7 +989,7 @@ export default function App() {
   const hasConnectedProvider = state !== null && displayedProviders.some((provider) => providerEnabled(state.settings, provider.id));
 
   return (
-    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme}
+    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme} data-pinned={pinned}
       tabIndex={-1} data-keyboard-navigation={keyboardNavigation}
       onPointerDownCapture={() => {
         window.cancelAnimationFrame(focusFrame.current);
@@ -968,27 +999,47 @@ export default function App() {
         window.cancelAnimationFrame(focusFrame.current);
         if (event.key === "Tab") setKeyboardNavigation(true);
       }}>
-      <header className="app-header">
-        <div className="brand">
+      <header className="app-header" onMouseDown={(event) => {
+        if (!native || !pinned || pinPending || event.button !== 0
+          || !(event.target instanceof Element) || event.target.closest("button, nav")) return;
+        event.preventDefault();
+        void invoke("drag_popover").catch((caught: unknown) => setError(errorMessage(caught)));
+      }}>
+        <div className="brand" title={pinned ? "Drag to move" : undefined}>
           <svg className="brand-mark" viewBox="0 0 30 18" fill="currentColor" aria-hidden="true">
             <path d="M.8 15.8 7.8 2.2 14.8 15.8Z M5.4 12.8 7.8 7.7 10.2 12.8Z" fillRule="evenodd" />
             <path d="M13.8 2.2h3.4l4.2 9.2 4.2-9.2H29l-6.1 13.6h-3Z" />
           </svg>
           <h1>Delta-V</h1>
         </div>
-        <nav className="provider-picker" aria-label="Show providers">
-          {(["claude", "codex", "both"] as const).map((value) => (
-            <button
-              key={value}
-              aria-pressed={selection === value}
-              className={selection === value ? "selected" : ""}
-              onClick={() => void selectProviders(value)}
-              disabled={!state || saving}
-            >
-              {value === "both" ? "Both" : providerNames[value]}
+        <div className="header-actions">
+          <nav className="provider-picker" aria-label="Show providers">
+            {(["claude", "codex", "both"] as const).map((value) => (
+              <button
+                key={value}
+                aria-pressed={selection === value}
+                className={selection === value ? "selected" : ""}
+                onClick={() => void selectProviders(value)}
+                disabled={!state || saving}
+              >
+                {value === "both" ? "Both" : providerNames[value]}
+              </button>
+            ))}
+          </nav>
+          <button className="pin-button" aria-pressed={pinned} aria-label={pinned ? "Unpin panel" : "Pin panel"}
+            title={pinned ? "Unpin and return to the menu bar" : "Keep open above other windows"}
+            disabled={pinPending || (!native && !preview)} onClick={() => void togglePin()}>
+            <Icon name="pin" />
+          </button>
+        </div>
+        {pinned && showDragHint && (
+          <div className="drag-hint">
+            <p role="status">Drag the header to move</p>
+            <button aria-label="Dismiss drag hint" title="Dismiss" onClick={() => setShowDragHint(false)}>
+              <Icon name="close" />
             </button>
-          ))}
-        </nav>
+          </div>
+        )}
       </header>
       <main className="scroll-area">
         <div ref={content} className="scroll-content">

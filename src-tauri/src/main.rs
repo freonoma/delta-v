@@ -109,6 +109,23 @@ fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), 
 }
 
 #[tauri::command]
+fn get_popover_pinned(app: tauri::AppHandle) -> bool {
+    platform::popover_pinned(&app)
+}
+
+#[tauri::command]
+async fn set_popover_pinned(app: tauri::AppHandle, pinned: bool) -> Result<bool, String> {
+    platform::set_popover_pinned(&app, pinned)
+        .await
+        .map_err(|_| "Could not change panel pinning.".to_owned())
+}
+
+#[tauri::command]
+fn drag_popover(app: tauri::AppHandle) -> Result<(), String> {
+    platform::drag_popover(&app).map_err(|_| "Could not move the usage panel.".to_owned())
+}
+
+#[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     runtime::request_quit(&app);
 }
@@ -131,6 +148,9 @@ fn main() -> tauri::Result<()> {
             save_settings,
             hide_popover,
             resize_popover,
+            get_popover_pinned,
+            set_popover_pinned,
+            drag_popover,
             quit_app
         ])
         .setup(|app| {
