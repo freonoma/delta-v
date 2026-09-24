@@ -1,6 +1,6 @@
 [package]
 name = "delta-v"
-version = "0.1.0"
+version = "0.2.0"
 description = "Claude Code and Codex usage in the macOS menu bar"
 edition = "2024"
 license = "MIT"
