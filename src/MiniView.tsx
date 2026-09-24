@@ -1,8 +1,6 @@
 import type { Limit, PercentageMode, ProviderId, ProviderState, RecoveryPhase, Settings } from "./types";
 import { eligibleQuota, hiddenLowQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, wholePercent } from "./usage";
 
-export type MiniLayout = "columns" | "stacked";
-
 const names: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 const sources: Record<Limit["provenance"], string> = {
   official: "Official", local_estimate: "Local estimate", unknown: "Unknown source",
@@ -41,8 +39,8 @@ function MiniReading({ limit, heading, primary, mode, threshold, now }: {
   );
 }
 
-export function MiniView({ providers, settings, now, expanded, pendingRecovery, onExpand, onDetails }: {
-  providers: ProviderState[]; settings: Settings; now: number; expanded: boolean;
+export function MiniView({ providers, settings, now, expanded, pending, pendingRecovery, onExpand, onDetails }: {
+  providers: ProviderState[]; settings: Settings; now: number; expanded: boolean; pending: boolean;
   pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
   onExpand: () => void; onDetails: () => void;
 }) {
@@ -76,7 +74,7 @@ export function MiniView({ providers, settings, now, expanded, pendingRecovery, 
             )) : <div className="mini-heading"><h2>{names[provider.id]}</h2></div>}
             {snapshot && slots.length === 0 && <p className="mini-unavailable">No quota windows</p>}
             {hiddenLow && hiddenRemaining !== null && (
-              <button className="mini-warning" title={`Show ${hiddenLow.label}`} onClick={() => {
+              <button className="mini-warning" disabled={pending} title={`Show ${hiddenLow.label}`} onClick={() => {
                 if (!expanded && slots[1]?.id === hiddenLow.id) onExpand();
                 else onDetails();
               }}>
@@ -86,11 +84,11 @@ export function MiniView({ providers, settings, now, expanded, pendingRecovery, 
             <div className="mini-source" title={snapshot ? `Updated ${sampleAge(snapshot.fetched_at, now)}` : undefined}>
               {provenance.map((source) => <span key={source} className={`provenance ${source}`}>{sources[source]}</span>)}
               {status && <button className={`mini-status${stale || provider.error ? " stale" : ""}`}
-                title={provider.error?.message ?? "Open full view"} onClick={onDetails}>{status}</button>}
+                disabled={pending} title={provider.error?.message ?? "Open full view"} onClick={onDetails}>{status}</button>}
               {!snapshot && provider.next_retry_at !== null && provider.next_retry_at > now && (
                 <span>Retry in {shortDuration(provider.next_retry_at - now)}</span>
               )}
-              {!snapshot && <button className="mini-details" onClick={onDetails}>Open details</button>}
+              {!snapshot && <button className="mini-details" disabled={pending} onClick={onDetails}>Open details</button>}
             </div>
           </section>
         );

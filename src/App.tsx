@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppState, Amount, IssueKind, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
+import type { AppState, Amount, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
 import { Startup, useLoginItem } from "./Startup";
-import { MiniView, type MiniLayout } from "./MiniView";
+import { MiniView } from "./MiniView";
 import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
 const preview = import.meta.env.DEV && !native;
+const defaultPanelPreferences: PanelPreferences = { pinned: false, mini: false, expanded: false, layout: "columns" };
 const providerNames: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 const clientNames: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
 const setupUrls: Record<ProviderId, string> = {
@@ -482,7 +483,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
   pendingConnection: Partial<Record<ProviderId, boolean>>;
   login: ReturnType<typeof useLoginItem>;
   miniLayout: MiniLayout;
-  onMiniLayoutChange: (layout: MiniLayout) => void;
+  onMiniLayoutChange: (layout: MiniLayout) => Promise<void>;
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
   onThemePreview: (theme: Theme | null) => void;
@@ -493,6 +494,8 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
   const panel = useRef<HTMLElement>(null);
   const [draft, setDraft] = useState(state.settings);
   const [layoutDraft, setLayoutDraft] = useState(miniLayout);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = saving || submitting;
   const [threshold, setThreshold] = useState(String(state.settings.threshold));
   const [interval, setIntervalValue] = useState(String(state.settings.refresh_seconds));
   const [validation, setValidation] = useState<string | null>(null);
@@ -512,6 +515,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
   useEffect(() => () => onThemePreview(null), [onThemePreview]);
 
   async function save() {
+    if (busy) return;
     const parsedThreshold = Number(threshold);
     const parsedInterval = Number(interval);
     if (!threshold.trim() || !Number.isInteger(parsedThreshold) || parsedThreshold < 0 || parsedThreshold > 100) {
@@ -523,24 +527,28 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
       return;
     }
     setValidation(null);
+    setSubmitting(true);
     try {
       await onSave({
         ...draft, providers: state.settings.providers, claude_enabled: state.settings.claude_enabled,
         codex_enabled: state.settings.codex_enabled, tracked_limit: tracked, threshold: parsedThreshold,
         refresh_seconds: parsedInterval,
       });
-      onMiniLayoutChange(layoutDraft);
+      await onMiniLayoutChange(layoutDraft);
       onClose();
     } catch (error: unknown) {
       setValidation(errorMessage(error));
+    } finally {
+      setSubmitting(false);
     }
   }
 
   return (
-    <section ref={panel} className="settings-panel" aria-label="Settings">
+    <section ref={panel} className="settings-panel" aria-label="Settings"
+      onKeyDown={(event) => { if (busy && event.key === "Escape") event.stopPropagation(); }}>
       <div className="settings-heading">
         <h2>Settings</h2>
-        <button className="icon-button" onClick={onClose} aria-label="Close settings"><Icon name="close" /></button>
+        <button className="icon-button" onClick={onClose} disabled={busy} aria-label="Close settings"><Icon name="close" /></button>
       </div>
       <label className="setting-row">
         <span>Menu bar tracks<small>Choose a usage window</small></span>
@@ -562,7 +570,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
       </div>
       <label className="setting-row">
         <span>Mini layout<small>When both providers are pinned</small></span>
-        <select value={layoutDraft} onChange={(event) => {
+        <select value={layoutDraft} disabled={busy} onChange={(event) => {
           const layout = event.target.value;
           if (layout === "columns" || layout === "stacked") setLayoutDraft(layout);
         }}>
@@ -610,8 +618,8 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
       </label>
       {validation && <p className="settings-validation" role="alert">{validation}</p>}
       <div className="settings-actions">
-        <button className="text-button" onClick={onClose} disabled={saving}>Cancel</button>
-        <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? "Saving" : "Save settings"}</button>
+        <button className="text-button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving" : "Save settings"}</button>
       </div>
       <Startup login={login} mode="settings" dismissed={state.settings.launch_at_login_prompt_dismissed} />
       <section className="accounts-settings" aria-label="Accounts">
@@ -636,12 +644,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const [mini, setMini] = useState(false);
-  const [miniExpanded, setMiniExpanded] = useState(false);
-  const [miniLayout, setMiniLayout] = useState<MiniLayout>("columns");
+  const [panelPreferences, setPanelPreferences] = useState<PanelPreferences | null>(preview ? defaultPanelPreferences : null);
+  const panelPreferencesRef = useRef(panelPreferences);
+  const panelCommandPending = useRef(false);
+  const panelReadGeneration = useRef(0);
   const [showDragHint, setShowDragHint] = useState(false);
-  const [pinPending, setPinPending] = useState(false);
+  const [panelPending, setPanelPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [keyboardNavigation, setKeyboardNavigation] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<Partial<Record<ProviderId, RecoveryPhase>>>({});
@@ -656,6 +664,9 @@ export default function App() {
   const previewTimers = useRef<Partial<Record<ProviderId, number>>>({});
   const selection = state?.settings.providers ?? "both";
   const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
+  const { pinned, mini, expanded: miniExpanded, layout: miniLayout } = panelPreferences ?? defaultPanelPreferences;
+  const panelReady = state !== null && panelPreferences !== null;
+  const panelBusy = !panelReady || panelPending;
   const miniActive = mini && pinned && !settingsOpen;
   const dismissStartupPrompt = useCallback(() => {
     setState((current) => current ? {
@@ -680,13 +691,26 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     let unlistenOpen: (() => void) | undefined;
     let unlistenMove: (() => void) | undefined;
+    let unlistenPanelError: (() => void) | undefined;
     void getCurrentWindow().onMoved(() => {
       if (!disposed) setShowDragHint(false);
     }).then((stop) => { if (disposed) stop(); else unlistenMove = stop; })
       .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    void invoke<boolean>("get_popover_pinned")
-      .then((value) => { if (!disposed) setPinned(value); })
+    void listen<string>("panel-state-error", (event) => {
+      if (!disposed) setError(event.payload);
+    }).then((stop) => { if (disposed) stop(); else unlistenPanelError = stop; })
       .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
+    const panelRead = ++panelReadGeneration.current;
+    void invoke<PanelPreferencesState>("get_panel_preferences")
+      .then((saved) => {
+        if (disposed || panelRead !== panelReadGeneration.current) return;
+        panelPreferencesRef.current = saved.preferences;
+        setPanelPreferences(saved.preferences);
+        if (saved.error) setError(saved.error);
+      })
+      .catch((caught: unknown) => {
+        if (!disposed && panelRead === panelReadGeneration.current) setError(errorMessage(caught));
+      });
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
@@ -706,30 +730,35 @@ export default function App() {
       const initial = await invoke<AppState>("get_state");
       if (!disposed && !receivedEvent) setState(initial);
     }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); window.cancelAnimationFrame(focusFrame.current); };
+    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); unlistenPanelError?.(); window.cancelAnimationFrame(focusFrame.current); };
   }, []);
 
   useEffect(() => {
     const element = shell.current;
     const scrollContent = content.current;
-    if (!native || !element || !scrollContent) return;
+    if (!native || !panelReady || !element || !scrollContent) return;
     let frame = 0;
     const resize = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        const width = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : selection === "both" ? 560 : 340;
+        const desiredWidth = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : selection === "both" ? 560 : 340;
+        const width = Math.min(desiredWidth, Math.max(220, window.screen.availWidth - 16));
+        const ready = Math.abs(window.innerWidth - width) < 1;
         const chromeHeight = Array.from(element.children)
           .filter((child) => !child.classList.contains("scroll-area"))
           .reduce((height, child) => height + child.getBoundingClientRect().height, 2);
-        // Widen first so wrapped content cannot push a pinned panel upward unnecessarily.
-        const contentHeight = window.innerWidth < width
-          ? window.innerHeight
-          : Math.ceil(chromeHeight + scrollContent.getBoundingClientRect().height);
+        // Measure after both widening and narrowing so restoration uses the final wrapping.
+        const contentHeight = ready
+          ? Math.ceil(chromeHeight + scrollContent.getBoundingClientRect().height)
+          : window.innerHeight;
         const height = Math.min(620, Math.max(miniActive ? 100 : 180, contentHeight));
-        const size = `${width}:${height}`;
+        const size = `${width}:${height}:${ready}`;
         if (lastSize.current === size) return;
         lastSize.current = size;
-        void invoke("resize_popover", { width, height }).catch((caught: unknown) => setError(errorMessage(caught)));
+        void invoke("resize_popover", { width, height, ready }).catch((caught: unknown) => {
+          if (lastSize.current === size) lastSize.current = "";
+          setError(errorMessage(caught));
+        });
       });
     };
     const observer = new ResizeObserver(resize);
@@ -740,13 +769,45 @@ export default function App() {
     window.addEventListener("resize", resize);
     resize();
     return () => { observer.disconnect(); window.removeEventListener("resize", resize); window.cancelAnimationFrame(frame); };
-  }, [selection, miniActive, miniLayout]);
+  }, [selection, miniActive, miniLayout, panelReady]);
+
+  const savePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
+    const current = panelPreferencesRef.current;
+    if (!current) throw new Error("Panel preferences are still loading. Try again in a moment.");
+    if (panelCommandPending.current) throw new Error("Wait for the panel change to finish, then try again.");
+    const preferences = { ...current, ...changes };
+    if (current.pinned === preferences.pinned && current.mini === preferences.mini
+      && current.expanded === preferences.expanded && current.layout === preferences.layout) return current;
+    panelCommandPending.current = true;
+    setPanelPending(true);
+    try {
+      const saved = preview ? preferences : await invoke<PanelPreferences>("save_panel_preferences", { preferences });
+      panelPreferencesRef.current = saved;
+      setPanelPreferences(saved);
+      setError(null);
+      return saved;
+    } finally {
+      panelCommandPending.current = false;
+      setPanelPending(false);
+    }
+  }, []);
+
+  const changePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
+    if (panelCommandPending.current || !panelPreferencesRef.current) return false;
+    try {
+      await savePanelPreferences(changes);
+      return true;
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+      return false;
+    }
+  }, [savePanelPreferences]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || saving || panelCommandPending.current) return;
       if (settingsOpen) { setSettingsOpen(false); return; }
-      if (miniActive && miniExpanded) { setMiniExpanded(false); return; }
+      if (miniActive && miniExpanded) { void changePanelPreferences({ expanded: false }); return; }
       if (!miniActive && expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
@@ -756,23 +817,13 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, expanded, miniActive, miniExpanded]);
+  }, [settingsOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences]);
 
   async function togglePin() {
-    if (pinPending) return;
-    setPinPending(true);
-    try {
-      const value = native ? await invoke<boolean>("set_popover_pinned", { pinned: !pinned }) : !pinned;
-      setPinned(value);
-      setShowDragHint(value);
-      if (!value) {
-        setMini(false);
-        setMiniExpanded(false);
-      }
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-    } finally {
-      setPinPending(false);
+    if (panelBusy) return;
+    const nextPinned = !pinned;
+    if (await changePanelPreferences(nextPinned ? { pinned: true } : { pinned: false, mini: false, expanded: false })) {
+      setShowDragHint(nextPinned);
     }
   }
 
@@ -798,7 +849,7 @@ export default function App() {
   }, []);
 
   async function selectProviders(providers: ProviderSelection) {
-    if (!state || providers === state.settings.providers || saving) return;
+    if (!state || providers === state.settings.providers || saving || panelBusy) return;
     try {
       await saveSettings({
         ...state.settings,
@@ -941,10 +992,20 @@ export default function App() {
     }
   }
 
-  function retryInitialRead() {
-    void invoke<AppState>("get_state")
-      .then((initial) => { setState(initial); setError(null); })
-      .catch((caught: unknown) => setError(errorMessage(caught)));
+  async function retryInitialRead() {
+    const panelRead = ++panelReadGeneration.current;
+    try {
+      const [initial, saved] = await Promise.all([
+        invoke<AppState>("get_state"), invoke<PanelPreferencesState>("get_panel_preferences"),
+      ]);
+      if (panelRead !== panelReadGeneration.current) return;
+      setState(initial);
+      panelPreferencesRef.current = saved.preferences;
+      setPanelPreferences(saved.preferences);
+      setError(saved.error);
+    } catch (caught: unknown) {
+      if (panelRead === panelReadGeneration.current) setError(errorMessage(caught));
+    }
   }
 
   function quit() {
@@ -963,9 +1024,15 @@ export default function App() {
       state.settings.tracked_limit, now).length > 1,
   );
 
-  function openFullView(details = false) {
-    setMini(false);
+  async function openFullView(details = false) {
+    if (!await changePanelPreferences({ mini: false })) return;
     setExpanded(details);
+    window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
+  }
+
+  async function openMiniView() {
+    if (!await changePanelPreferences({ mini: true })) return;
+    setShowDragHint(false);
     window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
   }
 
@@ -982,7 +1049,7 @@ export default function App() {
         if (event.key === "Tab") setKeyboardNavigation(true);
       }}>
       <header className="app-header" onMouseDown={(event) => {
-        if (!native || !pinned || pinPending || event.button !== 0
+        if (!native || !pinned || panelBusy || event.button !== 0
           || !(event.target instanceof Element) || event.target.closest("button, nav")) return;
         event.preventDefault();
         void invoke("drag_popover").catch((caught: unknown) => setError(errorMessage(caught)));
@@ -1003,7 +1070,7 @@ export default function App() {
                 aria-pressed={selection === value}
                 className={selection === value ? "selected" : ""}
                 onClick={() => void selectProviders(value)}
-                disabled={!state || saving}
+                disabled={panelBusy || saving}
               >
                 {value === "both" ? "Both" : providerNames[value]}
               </button>
@@ -1012,24 +1079,21 @@ export default function App() {
           {miniActive && (hasMiniExtra || miniExpanded) && (
             <button className="pin-button" aria-label={miniExpanded ? "Hide extra limits" : "Show more limits"}
               title={miniExpanded ? "Hide extra limits" : "Show more limits"}
-              aria-expanded={miniExpanded} aria-controls="mini-limits" onClick={() => setMiniExpanded(!miniExpanded)}>
+              aria-expanded={miniExpanded} aria-controls="mini-limits" disabled={panelBusy}
+              onClick={() => void changePanelPreferences({ expanded: !miniExpanded })}>
               <Icon name={miniExpanded ? "minus" : "plus"} />
             </button>
           )}
           <button className="pin-button" aria-pressed={pinned} aria-label={pinned ? "Unpin panel" : "Pin panel"}
             title={pinned ? "Unpin and return to the menu bar" : "Keep open above other windows"}
-            disabled={pinPending || (!native && !preview)} onClick={() => void togglePin()}>
+            disabled={panelBusy || saving || (!native && !preview)} onClick={() => void togglePin()}>
             <Icon name="pin" />
           </button>
           {pinned && <button className="pin-button" aria-label={miniActive ? "Open full view" : "Switch to mini view"}
-            title={miniActive ? "Open full view" : "Switch to mini view"} disabled={pinPending || !state || settingsOpen}
+            title={miniActive ? "Open full view" : "Switch to mini view"} disabled={panelBusy || saving || settingsOpen}
             onClick={() => {
-              if (miniActive) openFullView();
-              else {
-                setMini(true);
-                setShowDragHint(false);
-                window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
-              }
+              if (miniActive) void openFullView();
+              else void openMiniView();
             }}>
             <Icon name={miniActive ? "expand" : "mini"} />
           </button>}
@@ -1049,17 +1113,18 @@ export default function App() {
           {state?.paused && <div className="global-notice">Automatic refresh is paused while your screen is locked.</div>}
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
-          {miniActive && state ? (
+          {panelReady && miniActive && state ? (
             <MiniView providers={displayedProviders} settings={state.settings} now={now} expanded={miniExpanded}
-              pendingRecovery={pendingRecovery} onExpand={() => setMiniExpanded(true)} onDetails={() => openFullView(true)} />
-          ) : settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving} now={now} onSave={saveSettings}
+              pending={panelBusy} pendingRecovery={pendingRecovery}
+              onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
+          ) : panelReady && settingsOpen && state ? (
+            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} onSave={saveSettings}
               pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
-              miniLayout={miniLayout} onMiniLayoutChange={setMiniLayout}
+              miniLayout={miniLayout} onMiniLayoutChange={async (layout) => { await savePanelPreferences({ layout }); }}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
               onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
               onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
-          ) : state ? (
+          ) : panelReady && state ? (
             <>
               <Startup login={login} mode="prompt" dismissed={state.settings.launch_at_login_prompt_dismissed} />
               <div id="provider-limits" className={`provider-grid${selection === "both" ? " two-providers" : ""}`}>
@@ -1073,7 +1138,7 @@ export default function App() {
                   />
                 ))}
               </div>
-              <button className="expand-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls="provider-limits">
+              <button className="expand-button" disabled={panelBusy} onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls="provider-limits">
                 {expanded ? "Show less" : "Show more"}<Icon name="chevron" />
               </button>
             </>
@@ -1082,7 +1147,7 @@ export default function App() {
               <span className="loading-line" />
               <h2>{native ? "Reading your usage" : "Open Delta-V from your menu bar"}</h2>
               <p>{native ? "Connecting to your saved account information." : "Usage is available in the macOS app."}</p>
-              {native && error && <button className="text-button" onClick={retryInitialRead}>Try again</button>}
+              {native && error && <button className="text-button" onClick={() => void retryInitialRead()}>Try again</button>}
             </div>
           )}
         </div>
@@ -1092,12 +1157,12 @@ export default function App() {
           className={`footer-button${settingsOpen ? " active" : ""}`}
           onClick={() => setSettingsOpen(!settingsOpen)}
           aria-expanded={settingsOpen}
-          disabled={!state}
+          disabled={panelBusy || saving}
         >
           <Icon name="settings" />Settings
         </button>
         <div className="footer-right">
-          <button className="footer-button" onClick={() => void refresh()} disabled={refreshing || recovering || changingConnection || !hasConnectedProvider || (!native && !preview)}>
+          <button className="footer-button" onClick={() => void refresh()} disabled={panelBusy || refreshing || recovering || changingConnection || !hasConnectedProvider || (!native && !preview)}>
             <Icon name="refresh" spinning={refreshing} />{refreshing ? "Checking" : "Check now"}
           </button>
           <span className="footer-divider" />

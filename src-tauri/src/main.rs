@@ -1,5 +1,6 @@
 mod credentials;
 mod model;
+mod panel_state;
 mod platform;
 mod providers;
 mod runtime;
@@ -103,21 +104,27 @@ fn hide_popover(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn resize_popover(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
-    platform::resize_popover(&app, width, height)
+fn resize_popover(
+    app: tauri::AppHandle,
+    width: f64,
+    height: f64,
+    ready: bool,
+) -> Result<(), String> {
+    platform::resize_popover(&app, width, height, ready)
         .map_err(|_| "Could not resize the usage panel.".to_owned())
 }
 
 #[tauri::command]
-fn get_popover_pinned(app: tauri::AppHandle) -> bool {
-    platform::popover_pinned(&app)
+fn get_panel_preferences(app: tauri::AppHandle) -> Result<platform::PanelPreferencesView, String> {
+    platform::panel_preferences(&app)
 }
 
 #[tauri::command]
-async fn set_popover_pinned(app: tauri::AppHandle, pinned: bool) -> Result<bool, String> {
-    platform::set_popover_pinned(&app, pinned)
-        .await
-        .map_err(|_| "Could not change panel pinning.".to_owned())
+async fn save_panel_preferences(
+    app: tauri::AppHandle,
+    preferences: panel_state::PanelPreferences,
+) -> Result<panel_state::PanelPreferences, String> {
+    platform::save_panel_preferences(&app, preferences).await
 }
 
 #[tauri::command]
@@ -148,8 +155,8 @@ fn main() -> tauri::Result<()> {
             save_settings,
             hide_popover,
             resize_popover,
-            get_popover_pinned,
-            set_popover_pinned,
+            get_panel_preferences,
+            save_panel_preferences,
             drag_popover,
             quit_app
         ])

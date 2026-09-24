@@ -2,6 +2,19 @@ export type ProviderId = "claude" | "codex";
 export type ProviderSelection = ProviderId | "both";
 export type Theme = "system" | "light" | "dark";
 export type PercentageMode = "remaining" | "used";
+export type MiniLayout = "columns" | "stacked";
+
+export interface PanelPreferences {
+  pinned: boolean;
+  mini: boolean;
+  expanded: boolean;
+  layout: MiniLayout;
+}
+
+export interface PanelPreferencesState {
+  preferences: PanelPreferences;
+  error: string | null;
+}
 export type IssueKind = "sign_in" | "authentication" | "credential_access" | "configuration"
   | "access_denied" | "network" | "rate_limited" | "service" | "response" | "client_missing" | "recovery";
 export type RecoveryPhase = "renewing" | "signing_in" | "checking" | "cancelling";

@@ -78,9 +78,11 @@ Account actions take effect immediately, without **Save settings**. Cancelling t
 
 Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses which providers you see. **Show more** reveals additional windows, credits, and provider details. Clicking outside closes the panel; the next opening starts compact again.
 
-Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes settings or expanded details first, then hides the panel. Pinning lasts until you quit Delta-V.
+Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes settings or expanded details first, then hides the panel.
 
-Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Mini layout**. The mini layout choice lasts until you quit Delta-V.
+Delta-V remembers the pin, view and position when you quit. A pinned panel returns when the app launches, without taking keyboard focus. If its monitor is disconnected, it moves onto an available screen. Unpin it before quitting if you want Delta-V to start quietly in the menu bar.
+
+Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Mini layout**. Delta-V remembers the layout and whether the second window is expanded.
 
 Mini view uses the same first and second windows as **Settings → Compact view**. If another limit is running low, a warning stays visible even when that limit is hidden. Click it to see the limit. Stale readings remain labelled, and **Open details** takes you to connection controls when needed.
 
@@ -94,7 +96,7 @@ The percentages and bar fill change colour when less than 20% remains. When show
 
 **Appearance** offers Light, Dark, or System, which follows your Mac's appearance. Changes preview immediately. **Save settings** keeps them; **Cancel** or closing the panel restores the saved appearance.
 
-**Settings → Startup → Launch at login** opens Delta-V quietly in the menu bar when you log in to your Mac. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
+**Settings → Startup → Launch at login** opens Delta-V when you log in to your Mac. A saved pinned panel reappears; otherwise, the app starts quietly in the menu bar. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
 
 <img src="screenshots/settings.png" alt="Delta-V settings for per-provider windows, menu bar tracking, percentage display, threshold, refresh interval, and appearance" width="560">
 
@@ -160,6 +162,7 @@ The app reads these locations:
 | `~/.codex/auth.json` | Codex file-based sign-in |
 | Keychain service `Codex Auth`, account `cli\|<hash>` | Codex sign-in when configured for `keyring` or `auto` |
 | `~/.config/delta-v/config.toml` | Delta-V settings |
+| `~/.config/delta-v/panel.toml` | Pinned view, mini layout and screen position |
 | `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/` | Check for managed Claude settings before running renewal |
 | `/Library/Managed Preferences/com.anthropic.claudecode.plist` and `/Library/Managed Preferences/<username>/com.anthropic.claudecode.plist` | Check for managed Claude preferences before running renewal |
 | `~/.claude/remote-settings.json` | Check for cached Claude account policy before running renewal |
@@ -178,7 +181,7 @@ Delta-V looks for the official clients in common installation locations. If your
 
 Claude's sign-in actions require absolute custom directory paths. Remove empty directory overrides before using them.
 
-Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. It does not write a usage history or a separate copy of your credentials.
+Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not write a usage history or a separate copy of your credentials.
 
 Launch at login uses macOS's login-item service. Delta-V registers or unregisters its installed app only when you ask. macOS stores that setting; Delta-V saves only whether you dismissed the first-run prompt in its configuration file.
 

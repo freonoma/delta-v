@@ -634,6 +634,7 @@ pub fn request_quit(app: &AppHandle) {
                 })
                 .unwrap_or(false);
             if !active {
+                platform::finish_panel_drag(&app).await;
                 app.exit(0);
                 return;
             }

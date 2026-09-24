@@ -10,7 +10,7 @@ use std::{
     io::Read,
     process::{Command, Stdio},
     sync::{
-        Mutex,
+        Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -20,16 +20,20 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, tray::TrayIconEvent};
 use tauri_nspanel::{
     CollectionBehavior, ManagerExt, StyleMask, WebviewWindowExt,
-    objc2_app_kit::{NSFont, NSWorkspace},
-    objc2_foundation::{NSString, NSURL},
+    objc2_app_kit::{NSFont, NSScreen, NSWorkspace},
+    objc2_foundation::{NSNumber, NSString, NSURL},
     tauri_panel,
 };
 use tauri_plugin_positioner::{Position, WindowExt};
 
-use crate::model::ProviderId;
+use crate::{
+    model::ProviderId,
+    panel_state::{self, PanelPosition, PanelPreferences, PanelState},
+};
 
 const WINDOW: &str = "main";
 const TRAY: &str = "main";
+static DISPLAY_APP: OnceLock<AppHandle> = OnceLock::new();
 
 tauri_panel! {
     panel!(UsagePanel {
@@ -43,14 +47,37 @@ tauri_panel! {
 
 struct PopoverState {
     pinned: AtomicBool,
+    restore_pending: AtomicBool,
+    dragging: AtomicBool,
+    screen_change_pending: AtomicBool,
+    saved: Mutex<PanelRecord>,
     last_blur: Mutex<Option<Instant>>,
     preferred_size: Mutex<(f64, f64)>,
 }
 
-impl Default for PopoverState {
-    fn default() -> Self {
+struct PanelRecord {
+    state: PanelState,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct PanelPreferencesView {
+    preferences: PanelPreferences,
+    error: Option<String>,
+}
+
+impl PopoverState {
+    fn load() -> Self {
+        let (state, error) = match panel_state::load() {
+            Ok(state) => (state, None),
+            Err(error) => (PanelState::default(), Some(error.to_string())),
+        };
         Self {
-            pinned: AtomicBool::new(false),
+            pinned: AtomicBool::new(state.preferences.pinned),
+            restore_pending: AtomicBool::new(state.preferences.pinned),
+            dragging: AtomicBool::new(false),
+            screen_change_pending: AtomicBool::new(false),
+            saved: Mutex::new(PanelRecord { state, error }),
             last_blur: Mutex::new(None),
             preferred_size: Mutex::new((560.0, 360.0)),
         }
@@ -64,7 +91,7 @@ pub struct Activity {
 
 pub fn configure(app: &mut tauri::App) -> tauri::Result<()> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-    app.manage(PopoverState::default());
+    app.manage(PopoverState::load());
     let window = app
         .get_webview_window(WINDOW)
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -77,13 +104,28 @@ pub fn configure(app: &mut tauri::App) -> tauri::Result<()> {
             .ignores_cycle()
             .value(),
     );
-    panel.set_level(tauri_nspanel::PanelLevel::Status.value());
+    panel.set_level(if popover_pinned(app.handle()) {
+        tauri_nspanel::PanelLevel::Floating.value()
+    } else {
+        tauri_nspanel::PanelLevel::Status.value()
+    });
     // The panel belongs to an inactive accessory app; blur handles dismissal.
     panel.set_hides_on_deactivate(false);
     panel.set_has_shadow(true);
     panel.set_corner_radius(16.0);
     panel.set_transparent(true);
     panel.hide();
+
+    let _ = DISPLAY_APP.set(app.handle().clone());
+    // CoreGraphics can notify once per affected screen. Query AppKit after the change settles.
+    let result = unsafe {
+        CGDisplayRegisterReconfigurationCallback(Some(displays_changed), std::ptr::null_mut())
+    };
+    if result != 0 {
+        return Err(tauri::Error::Io(std::io::Error::other(
+            "Could not observe changes to connected displays",
+        )));
+    }
 
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
@@ -107,6 +149,9 @@ pub fn on_tray_event(app: &AppHandle, event: &TrayIconEvent) {
 }
 
 pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
+    app.state::<PopoverState>()
+        .restore_pending
+        .store(false, Ordering::Relaxed);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         let Ok(panel) = handle.get_webview_panel(WINDOW) else {
@@ -142,6 +187,9 @@ pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn hide_popover(app: &AppHandle) -> tauri::Result<()> {
+    app.state::<PopoverState>()
+        .restore_pending
+        .store(false, Ordering::Relaxed);
     let handle = app.clone();
     app.run_on_main_thread(move || {
         if let Ok(panel) = handle.get_webview_panel(WINDOW) {
@@ -157,47 +205,135 @@ pub fn popover_pinned(app: &AppHandle) -> bool {
     app.state::<PopoverState>().pinned.load(Ordering::Relaxed)
 }
 
-pub async fn set_popover_pinned(app: &AppHandle, pinned: bool) -> tauri::Result<bool> {
+pub fn panel_preferences(app: &AppHandle) -> Result<PanelPreferencesView, String> {
+    let state = app.state::<PopoverState>();
+    let saved = state
+        .saved
+        .lock()
+        .map_err(|_| "Could not read panel preferences.")?;
+    Ok(PanelPreferencesView {
+        preferences: saved.state.preferences,
+        error: saved.error.clone(),
+    })
+}
+
+pub async fn save_panel_preferences(
+    app: &AppHandle,
+    mut preferences: PanelPreferences,
+) -> Result<PanelPreferences, String> {
+    if !preferences.pinned {
+        preferences.mini = false;
+        preferences.expanded = false;
+    }
     let handle = app.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let result = (|| {
             let panel = handle
                 .get_webview_panel(WINDOW)
-                .map_err(|_| tauri::Error::WindowNotFound)?;
+                .map_err(|_| "Could not find the usage panel.")?;
             let state = handle.state::<PopoverState>();
-            if !pinned {
-                // Reattach before changing state so a failed move keeps the panel pinned.
-                position_popover(&handle, false)?;
+            let was_pinned = popover_pinned(&handle);
+            let mut candidate = state
+                .saved
+                .lock()
+                .map_err(|_| "Could not save panel preferences.")?
+                .state
+                .clone();
+            candidate.preferences = preferences;
+            if preferences.pinned && !was_pinned {
+                candidate.position = current_panel_position(&handle);
             }
-            panel.set_level(if pinned {
+            if !preferences.pinned && was_pinned {
+                position_popover(&handle, false)
+                    .map_err(|_| "Could not return the panel to the menu bar.")?;
+            }
+            if let Err(error) = panel_state::save(&candidate) {
+                if was_pinned {
+                    let _ = position_popover(&handle, true);
+                }
+                return Err(error.to_string());
+            }
+            {
+                let mut saved = state
+                    .saved
+                    .lock()
+                    .map_err(|_| "Could not save panel preferences.")?;
+                saved.state = candidate;
+                saved.error = None;
+            }
+            panel.set_level(if preferences.pinned {
                 tauri_nspanel::PanelLevel::Floating.value()
             } else {
                 tauri_nspanel::PanelLevel::Status.value()
             });
-            state.pinned.store(pinned, Ordering::Relaxed);
+            state.pinned.store(preferences.pinned, Ordering::Relaxed);
+            state.restore_pending.store(false, Ordering::Relaxed);
             if let Ok(mut last_blur) = state.last_blur.lock() {
                 *last_blur = None;
             }
-            Ok(pinned)
+            Ok(preferences)
         })();
         let _ = sender.send(result);
-    })?;
+    })
+    .map_err(|_| "Could not save panel preferences.")?;
     receiver
         .await
-        .map_err(|_| tauri::Error::Io(std::io::Error::other("Could not change panel pinning")))?
+        .map_err(|_| "Could not save panel preferences.".to_owned())?
 }
 
 pub fn drag_popover(app: &AppHandle) -> tauri::Result<()> {
     if !popover_pinned(app) {
         return Ok(());
     }
-    app.get_webview_window(WINDOW)
-        .ok_or(tauri::Error::WindowNotFound)?
-        .start_dragging()
+    let state = app.state::<PopoverState>();
+    if state.dragging.swap(true, Ordering::Relaxed) {
+        return Ok(());
+    }
+    let result = app
+        .get_webview_window(WINDOW)
+        .ok_or(tauri::Error::WindowNotFound)
+        .and_then(|window| window.start_dragging());
+    if result.is_err() {
+        state.dragging.store(false, Ordering::Relaxed);
+        return result;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let app = handle.clone();
+            if handle
+                .run_on_main_thread(move || {
+                    // AppKit's drag call returns before release and may consume mouse-up.
+                    let released = NSEvent::pressedMouseButtons() & 1 == 0;
+                    if released {
+                        app.state::<PopoverState>()
+                            .dragging
+                            .store(false, Ordering::Relaxed);
+                        if let Err(error) = remember_panel_position(&app) {
+                            report_panel_error(&app, error);
+                        }
+                        if let Err(error) = position_popover(&app, popover_pinned(&app)) {
+                            report_panel_error(&app, error.to_string());
+                        }
+                    }
+                    let _ = sender.send(released);
+                })
+                .is_err()
+            {
+                break;
+            }
+            if !matches!(receiver.await, Ok(false)) {
+                break;
+            }
+        }
+    });
+    Ok(())
 }
 
-pub fn resize_popover(app: &AppHandle, width: f64, height: f64) -> tauri::Result<()> {
+pub fn resize_popover(app: &AppHandle, width: f64, height: f64, ready: bool) -> tauri::Result<()> {
     if !width.is_finite() || !height.is_finite() {
         return Err(tauri::Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -215,8 +351,139 @@ pub fn resize_popover(app: &AppHandle, width: f64, height: f64) -> tauri::Result
     app.run_on_main_thread(move || {
         if let Err(error) = position_popover(&handle, popover_pinned(&handle)) {
             eprintln!("Could not position the usage panel: {error}");
+            return;
+        }
+        if ready
+            && handle
+                .state::<PopoverState>()
+                .restore_pending
+                .swap(false, Ordering::Relaxed)
+            && popover_pinned(&handle)
+            && let Ok(panel) = handle.get_webview_panel(WINDOW)
+        {
+            panel.show();
         }
     })
+}
+
+fn report_panel_error(app: &AppHandle, error: String) {
+    if let Ok(mut saved) = app.state::<PopoverState>().saved.lock() {
+        saved.error = Some(error.clone());
+    }
+    eprintln!("{error}");
+    let _ = app.emit("panel-state-error", error);
+}
+
+fn display_id(screen: &NSScreen) -> Option<u32> {
+    let description = screen.deviceDescription();
+    let value = description.objectForKey(&NSString::from_str("NSScreenNumber"))?;
+    Some(value.downcast_ref::<NSNumber>()?.unsignedIntValue())
+}
+
+fn position_on_display(frame: NSRect, available: NSRect, display_id: u32) -> PanelPosition {
+    PanelPosition {
+        display_id,
+        x: (frame.origin.x - available.origin.x).max(0.0),
+        top: (available.origin.y + available.size.height - frame.origin.y - frame.size.height)
+            .max(0.0),
+    }
+}
+
+fn current_panel_position(app: &AppHandle) -> Option<PanelPosition> {
+    let panel = app.get_webview_panel(WINDOW).ok()?;
+    let screen = panel.as_panel().screen()?;
+    Some(position_on_display(
+        panel.as_panel().frame(),
+        screen.visibleFrame(),
+        display_id(&screen)?,
+    ))
+}
+
+fn remember_panel_position(app: &AppHandle) -> Result<(), String> {
+    if !popover_pinned(app) {
+        return Ok(());
+    }
+    let position = current_panel_position(app).ok_or("Could not read the panel position.")?;
+    let state = app.state::<PopoverState>();
+    let mut saved = state
+        .saved
+        .lock()
+        .map_err(|_| "Could not save the panel position.")?;
+    if saved.state.position == Some(position) {
+        return Ok(());
+    }
+    let mut candidate = saved.state.clone();
+    candidate.position = Some(position);
+    saved.state = candidate;
+    panel_state::save(&saved.state).map_err(|error| error.to_string())?;
+    saved.error = None;
+    Ok(())
+}
+
+pub async fn finish_panel_drag(app: &AppHandle) {
+    let handle = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    if app
+        .run_on_main_thread(move || {
+            if handle
+                .state::<PopoverState>()
+                .dragging
+                .swap(false, Ordering::Relaxed)
+                && let Err(error) = remember_panel_position(&handle)
+            {
+                report_panel_error(&handle, error);
+            }
+            let _ = sender.send(());
+        })
+        .is_ok()
+    {
+        let _ = receiver.await;
+    }
+}
+
+unsafe extern "C" fn displays_changed(_: u32, flags: u32, _: *mut c_void) {
+    if flags & 1 != 0 {
+        return;
+    }
+    let Some(app) = DISPLAY_APP.get() else {
+        return;
+    };
+    let state = app.state::<PopoverState>();
+    if state.screen_change_pending.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let app = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            app.state::<PopoverState>()
+                .screen_change_pending
+                .store(false, Ordering::Relaxed);
+            if popover_pinned(&app)
+                && let Err(error) = position_popover(&app, true)
+            {
+                report_panel_error(&app, error.to_string());
+            }
+        });
+    });
+}
+
+fn restored_screen(ids: &[Option<u32>], preferred: u32) -> Option<usize> {
+    ids.iter()
+        .position(|id| *id == Some(preferred))
+        .or_else(|| (!ids.is_empty()).then_some(0))
+}
+
+fn restored_frame(position: PanelPosition, available: NSRect, requested: NSSize) -> NSRect {
+    let desired = NSRect::new(
+        NSPoint::new(
+            available.origin.x + position.x,
+            available.origin.y + available.size.height - position.top - requested.height,
+        ),
+        requested,
+    );
+    floating_frame(desired, available, requested)
 }
 
 fn popover_frame(anchor: NSRect, available: NSRect, requested: NSSize) -> NSRect {
@@ -259,6 +526,9 @@ fn floating_frame(current: NSRect, available: NSRect, requested: NSSize) -> NSRe
 }
 
 fn position_popover(app: &AppHandle, pinned: bool) -> tauri::Result<()> {
+    if app.state::<PopoverState>().dragging.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let window = app
         .get_webview_window(WINDOW)
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -272,10 +542,30 @@ fn position_popover(app: &AppHandle, pinned: bool) -> tauri::Result<()> {
         })?;
         NSSize::new(size.0, size.1)
     };
-    if pinned && let Some(screen) = panel.as_panel().screen() {
-        let frame = floating_frame(panel.as_panel().frame(), screen.visibleFrame(), requested);
-        panel.as_panel().setFrame_display(frame, true);
-        return Ok(());
+    if pinned {
+        let position = app
+            .state::<PopoverState>()
+            .saved
+            .lock()
+            .map_err(|_| {
+                tauri::Error::Io(std::io::Error::other("Could not read the panel position"))
+            })?
+            .state
+            .position;
+        if let Some(position) = position
+            && let Some(mtm) = MainThreadMarker::new()
+        {
+            let screens = NSScreen::screens(mtm);
+            let ids: Vec<_> = screens.iter().map(|screen| display_id(&screen)).collect();
+            if let Some(index) = restored_screen(&ids, position.display_id) {
+                let screen = screens.objectAtIndex(index);
+                panel.as_panel().setFrame_display(
+                    restored_frame(position, screen.visibleFrame(), requested),
+                    true,
+                );
+                return Ok(());
+            }
+        }
     }
     let positioned = if let Some(tray) = app.tray_by_id(TRAY) {
         let panel = panel.clone();
@@ -427,6 +717,10 @@ pub fn read_keychain(service: &str, account: &str) -> Result<String, String> {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
+    fn CGDisplayRegisterReconfigurationCallback(
+        callback: Option<unsafe extern "C" fn(u32, u32, *mut c_void)>,
+        user_info: *mut c_void,
+    ) -> i32;
     fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
     fn CGSessionCopyCurrentDictionary() -> *const c_void;
 }
@@ -561,5 +855,55 @@ mod tests {
             NSSize::new(560.0, 620.0),
         );
         assert_eq!(frame, rect(8.0, 32.0, 484.0, 500.0));
+    }
+
+    #[test]
+    fn restores_the_saved_display_or_a_visible_fallback() {
+        assert_eq!(restored_screen(&[Some(10), Some(20)], 20), Some(1));
+        assert_eq!(restored_screen(&[Some(10)], 20), Some(0));
+        assert_eq!(restored_screen(&[], 20), None);
+        assert_eq!(restored_screen(&[None, Some(20)], 20), Some(1));
+    }
+
+    #[test]
+    fn saved_position_follows_a_display_when_its_arrangement_changes() {
+        let original = rect(-1280.0, -300.0, 1280.0, 1000.0);
+        let frame = rect(-950.0, -80.0, 336.0, 150.0);
+        let saved = position_on_display(frame, original, 20);
+        assert_eq!(restored_frame(saved, original, frame.size), frame);
+        let rearranged = rect(1440.0, 40.0, 1280.0, 1000.0);
+        assert_eq!(
+            restored_frame(saved, rearranged, frame.size),
+            rect(1770.0, 260.0, 336.0, 150.0)
+        );
+    }
+
+    #[test]
+    fn expanding_at_an_edge_does_not_replace_the_saved_anchor() {
+        let available = rect(0.0, 48.0, 1440.0, 826.0);
+        let mini = rect(1080.0, 60.0, 336.0, 150.0);
+        let saved = position_on_display(mini, available, 10);
+        assert_eq!(
+            restored_frame(saved, available, NSSize::new(560.0, 620.0)),
+            rect(872.0, 56.0, 560.0, 620.0)
+        );
+        assert_eq!(restored_frame(saved, available, mini.size), mini);
+    }
+
+    #[test]
+    fn restore_clamps_to_a_smaller_replacement_display() {
+        let saved = PanelPosition {
+            display_id: 20,
+            x: 1800.0,
+            top: 900.0,
+        };
+        assert_eq!(
+            restored_frame(
+                saved,
+                rect(0.0, 24.0, 1024.0, 700.0),
+                NSSize::new(560.0, 620.0)
+            ),
+            rect(456.0, 32.0, 560.0, 620.0)
+        );
     }
 }
