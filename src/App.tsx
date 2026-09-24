@@ -5,6 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppState, Amount, IssueKind, Limit, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
 import { Startup, useLoginItem } from "./Startup";
+import { MiniView, type MiniLayout } from "./MiniView";
+import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
 const preview = import.meta.env.DEV && !native;
@@ -117,50 +119,9 @@ function DisconnectConfirmation({ provider, onConfirm, onCancel }: {
   );
 }
 
-function usedPercent(limit: Limit): number | null {
-  return limit.used_fraction !== null && Number.isFinite(limit.used_fraction)
-    ? limit.used_fraction * 100 : null;
-}
-
-function remainingPercent(limit: Limit): number | null {
-  const used = usedPercent(limit);
-  if (used === null) return null;
-  const remaining = Math.min(100, Math.max(0, 100 - used));
-  return Math.round(remaining * 1e9) / 1e9;
-}
-
-function quotaPercent(remaining: number, mode: PercentageMode): number {
-  return mode === "remaining" ? remaining : Math.round((100 - remaining) * 1e9) / 1e9;
-}
-
-function wholePercent(percentage: number, mode: PercentageMode): number {
-  return mode === "remaining" ? Math.ceil(percentage) : Math.floor(percentage);
-}
-
-function eligibleQuota(limit: Limit, now: number): boolean {
-  const used = usedPercent(limit);
-  return limit.enabled && limit.kind === "quota" && limit.provenance === "official"
-    && used !== null && used >= 0 && used <= 100
-    && (limit.resets_at === null || limit.resets_at > now);
-}
-
 function visibleTrackedLimit(tracked: string, providers: ProviderSelection): string {
   return providers === "both" || tracked === "auto" || tracked.startsWith(`${providers}:`)
     ? tracked : "auto";
-}
-
-function shortDuration(seconds: number): string {
-  const minutes = Math.max(1, Math.ceil(seconds / 60));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-}
-
-function sampleAge(timestamp: number, now: number): string {
-  const elapsed = Math.max(0, now - timestamp);
-  if (elapsed < 60) return "just now";
-  return `${shortDuration(Math.floor(elapsed / 60) * 60)} ago`;
 }
 
 function amountText(value: string, currency: string | null): string {
@@ -176,7 +137,7 @@ function amountDescription(amount: Amount): string | null {
   return null;
 }
 
-function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin"; spinning?: boolean }) {
+function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus"; spinning?: boolean }) {
   return (
     <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
@@ -187,6 +148,10 @@ function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit
       {name === "chevron" && <path d="m6 8 4 4 4-4" />}
       {name === "external" && <><path d="M11 3h6v6m0-6L8 12" /><path d="M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" /></>}
       {name === "pin" && <><path d="M7 3h6m-5 0v5l-3 3v2h10v-2l-3-3V3M10 13v4" /></>}
+      {name === "mini" && <path d="m3 3 5 5m-5 0h5V3m9 14-5-5m5 0h-5v5" />}
+      {name === "expand" && <path d="m12 8 5-5m-5 0h5v5M8 12l-5 5m5 0H3v-5" />}
+      {name === "plus" && <path d="M10 4v12M4 10h12" />}
+      {name === "minus" && <path d="M4 10h12" />}
     </svg>
   );
 }
@@ -232,25 +197,6 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode }: { limit: L
       </div>
     </li>
   );
-}
-
-function compactLimits(provider: ProviderId, limits: Limit[], featured: Limit | undefined, selected: string[]): Limit[] {
-  const quotas = limits.filter((limit) => limit.kind === "quota" && limit.enabled);
-  if (selected.length > 0) {
-    return selected.flatMap((id) => {
-      const limit = quotas.find((quota) => quota.id === id);
-      return limit ? [limit] : [];
-    });
-  }
-  const main = quotas.filter((limit) => provider === "claude"
-    ? limit.id === "session" || limit.id === "weekly"
-    : limit.id.startsWith("rate_limit:"));
-  const visible = (main.length > 0 ? main : quotas).slice(0, 2);
-  if (featured && !visible.some((limit) => limit.id === featured.id)) {
-    if (visible.length === 2) visible[1] = featured;
-    else visible.push(featured);
-  }
-  return visible;
 }
 
 function ProviderDetails({ limits, warnings }: { limits: Limit[]; warnings: string[] }) {
@@ -355,13 +301,8 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
     limit.enabled && limit.kind === "quota" && limit.resets_at !== null && limit.resets_at <= now,
   ) ?? false;
   const stale = provider.stale || expired;
-  const quotas = snapshot?.limits.filter((limit) => eligibleQuota(limit, now)) ?? [];
-  const chosen = quotas.find((limit) => settings.tracked_limit === `${provider.id}:${limit.id}`);
   const tracksThisProvider = settings.tracked_limit.startsWith(`${provider.id}:`);
-  const tightest = quotas.reduce<Limit | undefined>((current, limit) =>
-    !current || (usedPercent(limit) ?? 0) > (usedPercent(current) ?? 0) ? limit : current,
-  undefined);
-  const featured = tracksThisProvider ? chosen : tightest;
+  const featured = featuredQuota(provider.id, snapshot?.limits ?? [], settings.tracked_limit, now);
   const recognized = snapshot?.limits.filter((limit) => limit.kind !== "unknown") ?? [];
   const selected = provider.id === "claude" ? settings.claude_windows : settings.codex_windows;
   const shown = expanded ? recognized : compactLimits(provider.id, recognized, featured, selected);
@@ -533,13 +474,15 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   );
 }
 
-function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
+function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, miniLayout, onMiniLayoutChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
   state: AppState;
   saving: boolean;
   now: number;
   pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
   pendingConnection: Partial<Record<ProviderId, boolean>>;
   login: ReturnType<typeof useLoginItem>;
+  miniLayout: MiniLayout;
+  onMiniLayoutChange: (layout: MiniLayout) => void;
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
   onThemePreview: (theme: Theme | null) => void;
@@ -549,6 +492,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
 }) {
   const panel = useRef<HTMLElement>(null);
   const [draft, setDraft] = useState(state.settings);
+  const [layoutDraft, setLayoutDraft] = useState(miniLayout);
   const [threshold, setThreshold] = useState(String(state.settings.threshold));
   const [interval, setIntervalValue] = useState(String(state.settings.refresh_seconds));
   const [validation, setValidation] = useState<string | null>(null);
@@ -585,6 +529,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
         codex_enabled: state.settings.codex_enabled, tracked_limit: tracked, threshold: parsedThreshold,
         refresh_seconds: parsedInterval,
       });
+      onMiniLayoutChange(layoutDraft);
       onClose();
     } catch (error: unknown) {
       setValidation(errorMessage(error));
@@ -615,6 +560,16 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
           })}
         </div>
       </div>
+      <label className="setting-row">
+        <span>Mini layout<small>When both providers are pinned</small></span>
+        <select value={layoutDraft} onChange={(event) => {
+          const layout = event.target.value;
+          if (layout === "columns" || layout === "stacked") setLayoutDraft(layout);
+        }}>
+          <option value="columns">Side by side</option>
+          <option value="stacked">Stacked</option>
+        </select>
+      </label>
       <label className="setting-row">
         <span>Show percentages as<small>Menu bar and quota bars</small></span>
         <select value={draft.percentage_mode} onChange={(event) => {
@@ -682,6 +637,9 @@ export default function App() {
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [pinned, setPinned] = useState(false);
+  const [mini, setMini] = useState(false);
+  const [miniExpanded, setMiniExpanded] = useState(false);
+  const [miniLayout, setMiniLayout] = useState<MiniLayout>("columns");
   const [showDragHint, setShowDragHint] = useState(false);
   const [pinPending, setPinPending] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -698,6 +656,7 @@ export default function App() {
   const previewTimers = useRef<Partial<Record<ProviderId, number>>>({});
   const selection = state?.settings.providers ?? "both";
   const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
+  const miniActive = mini && pinned && !settingsOpen;
   const dismissStartupPrompt = useCallback(() => {
     setState((current) => current ? {
       ...current, settings: { ...current.settings, launch_at_login_prompt_dismissed: true },
@@ -758,11 +717,15 @@ export default function App() {
     const resize = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        const width = selection === "both" ? 560 : 340;
+        const width = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : selection === "both" ? 560 : 340;
         const chromeHeight = Array.from(element.children)
           .filter((child) => !child.classList.contains("scroll-area"))
           .reduce((height, child) => height + child.getBoundingClientRect().height, 2);
-        const height = Math.min(620, Math.max(180, Math.ceil(chromeHeight + scrollContent.getBoundingClientRect().height)));
+        // Widen first so wrapped content cannot push a pinned panel upward unnecessarily.
+        const contentHeight = window.innerWidth < width
+          ? window.innerHeight
+          : Math.ceil(chromeHeight + scrollContent.getBoundingClientRect().height);
+        const height = Math.min(620, Math.max(miniActive ? 100 : 180, contentHeight));
         const size = `${width}:${height}`;
         if (lastSize.current === size) return;
         lastSize.current = size;
@@ -774,15 +737,17 @@ export default function App() {
     for (const child of element.children) {
       if (!child.classList.contains("scroll-area")) observer.observe(child);
     }
+    window.addEventListener("resize", resize);
     resize();
-    return () => { observer.disconnect(); window.cancelAnimationFrame(frame); };
-  }, [selection]);
+    return () => { observer.disconnect(); window.removeEventListener("resize", resize); window.cancelAnimationFrame(frame); };
+  }, [selection, miniActive, miniLayout]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (settingsOpen) { setSettingsOpen(false); return; }
-      if (expanded) { setExpanded(false); return; }
+      if (miniActive && miniExpanded) { setMiniExpanded(false); return; }
+      if (!miniActive && expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
         setSettingsOpen(false);
@@ -791,7 +756,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, expanded]);
+  }, [settingsOpen, expanded, miniActive, miniExpanded]);
 
   async function togglePin() {
     if (pinPending) return;
@@ -800,6 +765,10 @@ export default function App() {
       const value = native ? await invoke<boolean>("set_popover_pinned", { pinned: !pinned }) : !pinned;
       setPinned(value);
       setShowDragHint(value);
+      if (!value) {
+        setMini(false);
+        setMiniExpanded(false);
+      }
     } catch (caught: unknown) {
       setError(errorMessage(caught));
     } finally {
@@ -987,9 +956,22 @@ export default function App() {
   const recovering = state?.providers.some((provider) => provider.recovery !== null) || Object.keys(pendingRecovery).length > 0;
   const changingConnection = Object.keys(pendingConnection).length > 0;
   const hasConnectedProvider = state !== null && displayedProviders.some((provider) => providerEnabled(state.settings, provider.id));
+  const hasMiniExtra = state !== null && displayedProviders.some((provider) =>
+    providerEnabled(state.settings, provider.id) && provider.snapshot !== null
+    && miniLimits(provider.id, provider.snapshot.limits,
+      provider.id === "claude" ? state.settings.claude_windows : state.settings.codex_windows,
+      state.settings.tracked_limit, now).length > 1,
+  );
+
+  function openFullView(details = false) {
+    setMini(false);
+    setExpanded(details);
+    window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
+  }
 
   return (
     <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme} data-pinned={pinned}
+      data-mini={miniActive} data-mini-layout={miniLayout}
       tabIndex={-1} data-keyboard-navigation={keyboardNavigation}
       onPointerDownCapture={() => {
         window.cancelAnimationFrame(focusFrame.current);
@@ -1005,15 +987,16 @@ export default function App() {
         event.preventDefault();
         void invoke("drag_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       }}>
-        <div className="brand" title={pinned ? "Drag to move" : undefined}>
+        <div className="brand" title={pinned ? "Drag to move" : undefined} aria-label={miniActive ? "Delta-V" : undefined}>
           <svg className="brand-mark" viewBox="0 0 30 18" fill="currentColor" aria-hidden="true">
             <path d="M.8 15.8 7.8 2.2 14.8 15.8Z M5.4 12.8 7.8 7.7 10.2 12.8Z" fillRule="evenodd" />
             <path d="M13.8 2.2h3.4l4.2 9.2 4.2-9.2H29l-6.1 13.6h-3Z" />
           </svg>
-          <h1>Delta-V</h1>
+          {!miniActive && <h1>Delta-V</h1>}
+          {miniActive && <span className="mini-mode">{state?.settings.percentage_mode}</span>}
         </div>
         <div className="header-actions">
-          <nav className="provider-picker" aria-label="Show providers">
+          {!miniActive && <nav className="provider-picker" aria-label="Show providers">
             {(["claude", "codex", "both"] as const).map((value) => (
               <button
                 key={value}
@@ -1025,12 +1008,31 @@ export default function App() {
                 {value === "both" ? "Both" : providerNames[value]}
               </button>
             ))}
-          </nav>
+          </nav>}
+          {miniActive && (hasMiniExtra || miniExpanded) && (
+            <button className="pin-button" aria-label={miniExpanded ? "Hide extra limits" : "Show more limits"}
+              title={miniExpanded ? "Hide extra limits" : "Show more limits"}
+              aria-expanded={miniExpanded} aria-controls="mini-limits" onClick={() => setMiniExpanded(!miniExpanded)}>
+              <Icon name={miniExpanded ? "minus" : "plus"} />
+            </button>
+          )}
           <button className="pin-button" aria-pressed={pinned} aria-label={pinned ? "Unpin panel" : "Pin panel"}
             title={pinned ? "Unpin and return to the menu bar" : "Keep open above other windows"}
             disabled={pinPending || (!native && !preview)} onClick={() => void togglePin()}>
             <Icon name="pin" />
           </button>
+          {pinned && <button className="pin-button" aria-label={miniActive ? "Open full view" : "Switch to mini view"}
+            title={miniActive ? "Open full view" : "Switch to mini view"} disabled={pinPending || !state || settingsOpen}
+            onClick={() => {
+              if (miniActive) openFullView();
+              else {
+                setMini(true);
+                setShowDragHint(false);
+                window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
+              }
+            }}>
+            <Icon name={miniActive ? "expand" : "mini"} />
+          </button>}
         </div>
         {pinned && showDragHint && (
           <div className="drag-hint">
@@ -1047,9 +1049,13 @@ export default function App() {
           {state?.paused && <div className="global-notice">Automatic refresh is paused while your screen is locked.</div>}
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
-          {settingsOpen && state ? (
+          {miniActive && state ? (
+            <MiniView providers={displayedProviders} settings={state.settings} now={now} expanded={miniExpanded}
+              pendingRecovery={pendingRecovery} onExpand={() => setMiniExpanded(true)} onDetails={() => openFullView(true)} />
+          ) : settingsOpen && state ? (
             <SettingsPanel key={selection} state={state} saving={saving} now={now} onSave={saveSettings}
               pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
+              miniLayout={miniLayout} onMiniLayoutChange={setMiniLayout}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
               onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
               onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
@@ -1081,7 +1087,7 @@ export default function App() {
           )}
         </div>
       </main>
-      <footer className="app-footer">
+      {!miniActive && <footer className="app-footer">
         <button
           className={`footer-button${settingsOpen ? " active" : ""}`}
           onClick={() => setSettingsOpen(!settingsOpen)}
@@ -1099,7 +1105,7 @@ export default function App() {
             <Icon name="quit" />Quit
           </button>
         </div>
-      </footer>
+      </footer>}
     </div>
   );
 }

@@ -209,7 +209,7 @@ pub fn resize_popover(app: &AppHandle, width: f64, height: f64) -> tauri::Result
         let mut size = state.preferred_size.lock().map_err(|_| {
             tauri::Error::Io(std::io::Error::other("Could not resize the usage panel"))
         })?;
-        *size = (width.clamp(300.0, 800.0), height.clamp(180.0, 620.0));
+        *size = (width.clamp(220.0, 800.0), height.clamp(100.0, 620.0));
     }
     let handle = app.clone();
     app.run_on_main_thread(move || {

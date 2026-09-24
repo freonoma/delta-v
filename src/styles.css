@@ -117,6 +117,41 @@ h1, h2, p { margin: 0; }
 .provider-picker button { flex: 1; height: 25px; border: 0; padding: 0 5px; color: var(--secondary); background: transparent; border-radius: 5px; font-size: 10px; font-weight: 550; transition: background 120ms, color 120ms; }
 .provider-picker button:hover:not(:disabled) { color: var(--text); }
 .provider-picker .selected { background: var(--selected); color: var(--text); box-shadow: var(--shadow); }
+.popover-shell[data-pinned="true"]:not([data-layout="both"]) .provider-picker { width: 138px; }
+.popover-shell[data-pinned="true"]:not([data-layout="both"]) .app-header { gap: 6px; }
+.popover-shell[data-mini="true"] { width: 232px; border-radius: 10px; }
+.popover-shell[data-mini="true"][data-layout="both"][data-mini-layout="columns"] { width: 336px; }
+.popover-shell[data-mini="true"] .app-header { padding: 5px 9px; gap: 6px; border-bottom: 1px solid var(--line); }
+.popover-shell[data-mini="true"] .brand-mark { width: 24px; height: 18px; }
+.popover-shell[data-mini="true"] .header-actions { gap: 2px; }
+.popover-shell[data-mini="true"] .pin-button { width: 26px; height: 26px; }
+.mini-mode { color: var(--secondary); font-size: 10px; }
+.mini-grid { display: grid; grid-template-columns: minmax(0, 1fr); padding: 10px 12px; gap: 10px; }
+.popover-shell[data-layout="both"][data-mini-layout="columns"] .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mini-provider { min-width: 0; }
+.mini-provider + .mini-provider { border-top: 1px solid var(--line); padding-top: 10px; }
+.popover-shell[data-layout="both"][data-mini-layout="columns"] .mini-provider + .mini-provider { border-top: 0; padding-top: 0; border-left: 1px solid var(--line); padding-left: 10px; }
+.mini-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-height: 23px; }
+.mini-heading h2, .mini-heading h3 { margin: 0; font-size: 11px; line-height: 1.35; font-weight: 600; overflow-wrap: anywhere; }
+.mini-percentage { font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.7px; white-space: nowrap; }
+.mini-percentage > span { font-size: 12px; letter-spacing: 0; }
+.mini-reading .usage-bar { height: 3px; margin-top: 5px; }
+.mini-reading.low .mini-percentage { color: var(--warning); }
+.mini-meta { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; column-gap: 5px; row-gap: 3px; margin-top: 6px; color: var(--secondary); font-size: 9px; line-height: 1.35; }
+.mini-meta > span:first-child { overflow-wrap: anywhere; }
+.mini-meta > span:last-child { font-variant-numeric: tabular-nums; }
+.mini-reading + .mini-reading { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.mini-reading + .mini-reading .mini-percentage { font-size: 16px; }
+.mini-unavailable { margin-top: 4px; color: var(--secondary); font-size: 10px; line-height: 1.4; }
+.mini-source { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; margin-top: 7px; color: var(--secondary); font-size: 9px; line-height: 1.4; }
+.mini-status, .mini-details { border: 0; padding: 0; text-align: left; color: var(--secondary); background: transparent; font-size: 9px; line-height: 1.4; border-radius: 2px; }
+.mini-status.stale { color: var(--warning); }
+.mini-status:hover, .mini-details:hover { text-decoration: underline; }
+.mini-details { color: var(--accent); }
+.mini-warning { display: block; width: 100%; border: 0; border-radius: 4px; margin-top: 7px; padding: 5px 6px; text-align: left; overflow-wrap: anywhere; color: var(--warning); background: var(--warning-soft); font-size: 10px; line-height: 1.35; }
+.mini-warning:hover { box-shadow: inset 0 0 0 1px var(--warning-border); }
+.popover-shell[data-mini="true"] .preview-notice { padding: 3px 6px; margin: 5px 9px 0; font-size: 9px; }
+.popover-shell[data-mini="true"] .global-notice, .popover-shell[data-mini="true"] .global-error { margin: 7px 9px 0; padding: 6px; font-size: 10px; }
 .scroll-area { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .scroll-content { display: flow-root; }
 .provider-grid { display: grid; grid-template-columns: minmax(0, 1fr); padding: 0 12px; gap: 10px; }

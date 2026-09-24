@@ -80,6 +80,10 @@ Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses 
 
 Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes settings or expanded details first, then hides the panel. Pinning lasts until you quit Delta-V.
 
+Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Mini layout**. The mini layout choice lasts until you quit Delta-V.
+
+Mini view uses the same first and second windows as **Settings → Compact view**. If another limit is running low, a warning stays visible even when that limit is hidden. Click it to see the limit. Stale readings remain labelled, and **Open details** takes you to connection controls when needed.
+
 Under **Settings → Compact view**, choose a first and optional second window for each provider. For example, show Claude's five-hour window alongside its weekly model limit, and choose different windows for Codex. **Automatic** lets Delta-V choose. These settings control the compact rows. Show more always reveals all reported limits the app understands.
 
 Percentages show **remaining** usage by default. A window at 55% used has 45% remaining. Under **Settings → Show percentages as**, choose **Used** if you prefer. This changes the menu bar, the large provider percentages, and the usage bars together.
