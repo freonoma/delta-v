@@ -13,7 +13,8 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+# Tauri 2.12 uses tray-icon 0.25; the lockfile includes its macOS 27 click fix.
+tauri = { version = "2.12", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "c9ec2130422200f0863b23dfdad02b133a529b07" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
