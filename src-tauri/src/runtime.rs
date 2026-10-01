@@ -173,6 +173,68 @@ pub fn history_state(app: &AppHandle) -> Result<HistoryState, String> {
     app.state::<Runtime>().history.state()
 }
 
+#[derive(Serialize)]
+pub struct HistoryCatalog {
+    accounts: Vec<crate::recording::SavedAccount>,
+    current_accounts: Vec<CurrentHistoryAccount>,
+}
+
+#[derive(Serialize)]
+struct CurrentHistoryAccount {
+    provider: ProviderId,
+    account_key: Option<String>,
+    verified_at: Option<i64>,
+}
+
+fn current_history_accounts(view: &AppState) -> Vec<CurrentHistoryAccount> {
+    PROVIDERS
+        .into_iter()
+        .map(|provider| {
+            let snapshot = view
+                .providers
+                .iter()
+                .find(|state| {
+                    state.id == provider
+                        && view.settings.is_enabled(provider)
+                        && state.error.is_none()
+                        && state.recovery.is_none()
+                        && !state.stale
+                })
+                .and_then(|state| state.snapshot.as_ref())
+                .filter(|snapshot| snapshot.history_account.is_some());
+            CurrentHistoryAccount {
+                provider,
+                account_key: snapshot.and_then(|snapshot| snapshot.history_account.clone()),
+                verified_at: snapshot.map(|snapshot| snapshot.fetched_at),
+            }
+        })
+        .collect()
+}
+
+pub fn history_catalog(app: &AppHandle) -> Result<HistoryCatalog, String> {
+    let runtime = app.state::<Runtime>();
+    let accounts = runtime
+        .history
+        .catalog(providers::now())
+        .map_err(|error| error.to_string())?;
+    Ok(HistoryCatalog {
+        accounts,
+        current_accounts: current_history_accounts(&runtime.state()?),
+    })
+}
+
+pub fn query_history(
+    app: &AppHandle,
+    request: crate::history_query::QueryRequest,
+) -> Result<crate::history_query::QueryResult, String> {
+    let runtime = app.state::<Runtime>();
+    let threshold = runtime.state()?.settings.threshold;
+    runtime
+        .history
+        .query(request, providers::now(), threshold)
+        .map_err(|error| error.to_string())
+}
+
 pub fn refresh_history_state(app: &AppHandle) -> Result<HistoryState, String> {
     let runtime = app.state::<Runtime>();
     let _ = runtime.history.refresh(providers::now());
@@ -1285,6 +1347,44 @@ mod tests {
         assert!(tray_reading(&inner.view, 199).is_some());
         assert!(tray_reading(&inner.view, 200).is_none());
         assert!(is_stale(&inner.view.providers[0], 200, 600));
+    }
+
+    #[test]
+    fn history_current_account_requires_a_fresh_verified_connected_snapshot() {
+        let mut view = inner().view;
+        assert!(
+            current_history_accounts(&view)
+                .iter()
+                .all(|account| account.account_key.is_none())
+        );
+        view.providers[0].snapshot.as_mut().unwrap().history_account = Some("a".repeat(64));
+        let accounts = current_history_accounts(&view);
+        assert_eq!(accounts[0].provider, ProviderId::Claude);
+        assert_eq!(
+            accounts[0].account_key.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        assert_eq!(accounts[0].verified_at, Some(100));
+        assert_eq!(accounts[1].provider, ProviderId::Codex);
+        assert!(accounts[1].account_key.is_none());
+
+        for reason in 0..4 {
+            let mut unavailable = view.clone();
+            match reason {
+                0 => unavailable.settings.claude_enabled = false,
+                1 => unavailable.providers[0].stale = true,
+                2 => unavailable.providers[0].recovery = Some(RecoveryStage::SigningIn),
+                _ => {
+                    unavailable.providers[0].error = Some(Issue {
+                        kind: IssueKind::Authentication,
+                        message: "Sign in again.".into(),
+                    })
+                }
+            }
+            let account = current_history_accounts(&unavailable).remove(0);
+            assert!(account.account_key.is_none());
+            assert!(account.verified_at.is_none());
+        }
     }
 
     #[test]

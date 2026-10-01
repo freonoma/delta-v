@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{
         Mutex,
@@ -10,7 +11,9 @@ use serde::Serialize;
 
 use crate::{
     history::{HistoryLimit, HistoryRecord, Retention, Store, StoreInfo},
+    history_query::{Accumulator, LimitKey, QueryError, QueryRequest, QueryResult},
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
+    platform::calendar::Calendar,
 };
 
 #[derive(Clone, PartialEq, Serialize)]
@@ -26,6 +29,23 @@ pub struct HistoryState {
     pub info: StoreInfo,
     pub error: Option<String>,
     pub provider_issues: Vec<ProviderIssue>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SavedWindow {
+    pub key: LimitKey,
+    pub label: String,
+    pub first_recorded_at: i64,
+    pub last_recorded_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SavedAccount {
+    pub provider: ProviderId,
+    pub account_key: String,
+    pub first_recorded_at: i64,
+    pub last_recorded_at: i64,
+    pub windows: Vec<SavedWindow>,
 }
 
 struct Inner {
@@ -90,6 +110,7 @@ impl Recorder {
     }
 
     pub fn set_recording(&self, enabled: bool) -> Result<(), String> {
+        self.invalidate();
         let mut inner = self
             .inner
             .lock()
@@ -187,6 +208,140 @@ impl Recorder {
         update_info(&mut inner, result.map_err(|error| error.to_string()))?;
         inner.last_saved[index] = Some(identity);
         Ok(())
+    }
+
+    pub fn catalog(&self, now: i64) -> Result<Vec<SavedAccount>, QueryError> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let inner = self.inner.lock().map_err(|_| QueryError::Unavailable)?;
+        self.check_epoch(epoch)?;
+        let store = inner.store.as_ref().ok_or(QueryError::Unavailable)?;
+        let mut catalog = Catalog::default();
+        store.visit_records(
+            inner.view.retention.cutoff(now),
+            now.saturating_add(1),
+            || self.check_epoch(epoch),
+            |record| catalog.observe(record),
+        )?;
+        self.check_epoch(epoch)?;
+        Ok(catalog.finish())
+    }
+
+    pub fn query(
+        &self,
+        request: QueryRequest,
+        now: i64,
+        threshold: u8,
+    ) -> Result<QueryResult, QueryError> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let calendar = Calendar::local()?;
+        let mut query = Accumulator::new(request, calendar, now, f64::from(threshold))?;
+        let inner = self.inner.lock().map_err(|_| QueryError::Unavailable)?;
+        self.check_epoch(epoch)?;
+        let store = inner.store.as_ref().ok_or(QueryError::Unavailable)?;
+        let (from, until) = query.reader_boundaries();
+        let from = from.max(inner.view.retention.cutoff(now));
+        store.visit_records(
+            from,
+            until,
+            || self.check_epoch(epoch),
+            |record| query.observe(record),
+        )?;
+        let result = query.finish()?;
+        self.check_epoch(epoch)?;
+        Ok(result)
+    }
+
+    fn check_epoch(&self, expected: u64) -> Result<(), QueryError> {
+        if self.epoch.load(Ordering::SeqCst) == expected {
+            Ok(())
+        } else {
+            Err(QueryError::Cancelled)
+        }
+    }
+}
+
+#[derive(Default)]
+struct Catalog {
+    accounts: BTreeMap<(u8, String), AccountWindows>,
+    window_count: usize,
+}
+
+struct AccountWindows {
+    provider: ProviderId,
+    first: i64,
+    last: i64,
+    windows: BTreeMap<(String, Option<u64>, u8), SavedWindow>,
+}
+
+impl Catalog {
+    fn observe(&mut self, record: HistoryRecord) -> Result<(), QueryError> {
+        let provider = match record.provider {
+            ProviderId::Claude => 0,
+            ProviderId::Codex => 1,
+        };
+        let key = (provider, record.account_key);
+        if !self.accounts.contains_key(&key) && self.accounts.len() >= 256 {
+            return Err(QueryError::TooLarge);
+        }
+        let account = self.accounts.entry(key).or_insert_with(|| AccountWindows {
+            provider: record.provider,
+            first: record.observed_at,
+            last: record.observed_at,
+            windows: BTreeMap::new(),
+        });
+        account.first = account.first.min(record.observed_at);
+        account.last = account.last.max(record.observed_at);
+        for limit in record.limits {
+            let provenance = match limit.provenance {
+                Provenance::Official => 0,
+                Provenance::LocalEstimate => 1,
+                Provenance::Unknown => 2,
+            };
+            let index = (limit.id.clone(), limit.window_seconds, provenance);
+            if !account.windows.contains_key(&index) {
+                if self.window_count >= 4096 {
+                    return Err(QueryError::TooLarge);
+                }
+                self.window_count += 1;
+            }
+            let window = account.windows.entry(index).or_insert_with(|| SavedWindow {
+                key: LimitKey {
+                    id: limit.id,
+                    window_seconds: limit.window_seconds,
+                    provenance: limit.provenance,
+                },
+                label: limit.label.clone(),
+                first_recorded_at: record.observed_at,
+                last_recorded_at: record.observed_at,
+            });
+            window.first_recorded_at = window.first_recorded_at.min(record.observed_at);
+            if record.observed_at > window.last_recorded_at {
+                window.last_recorded_at = record.observed_at;
+                window.label = limit.label;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Vec<SavedAccount> {
+        let mut accounts: Vec<_> = self
+            .accounts
+            .into_iter()
+            .map(|((_, account_key), saved)| SavedAccount {
+                provider: saved.provider,
+                account_key,
+                first_recorded_at: saved.first,
+                last_recorded_at: saved.last,
+                windows: saved.windows.into_values().collect(),
+            })
+            .collect();
+        accounts.sort_by(|left, right| {
+            right
+                .last_recorded_at
+                .cmp(&left.last_recorded_at)
+                .then_with(|| left.account_key.cmp(&right.account_key))
+        });
+        accounts
     }
 }
 
@@ -463,5 +618,125 @@ mod tests {
         assert!(recorder.state().unwrap().error.is_none());
         recorder.record(&reading(&recorder, 1002), 1002).unwrap();
         assert_eq!(recorder.state().unwrap().info.records, 1);
+    }
+
+    #[test]
+    fn queries_saved_readings_while_paused_without_creating_or_changing_files() {
+        use crate::history_query::HistoryRange;
+        let directory = Directory::new();
+        let recorder = directory.recorder(true);
+        let now = 1_790_856_000;
+        let request = QueryRequest {
+            provider: ProviderId::Claude,
+            account_key: "a".repeat(64),
+            limit: LimitKey {
+                id: "session".into(),
+                window_seconds: Some(18_000),
+                provenance: Provenance::Official,
+            },
+            range: HistoryRange::Today {},
+        };
+        assert!(recorder.catalog(now).unwrap().is_empty());
+        assert!(
+            recorder
+                .query(request.clone(), now, 20)
+                .unwrap()
+                .points
+                .is_empty()
+        );
+        assert!(!directory.0.exists());
+        for at in [now - 1, now, now + 1] {
+            recorder.record(&reading(&recorder, at), at).unwrap();
+        }
+        let mut other = reading(&recorder, now);
+        other.history_account = Some("b".repeat(64));
+        other.limits[0].used_fraction = Some(1.0);
+        recorder.record(&other, now).unwrap();
+        recorder.set_recording(false).unwrap();
+        let file = fs::read_dir(&directory.0)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let original = fs::read(&file).unwrap();
+        let result = recorder.query(request, now, 20).unwrap();
+        assert_eq!(result.points.len(), 2);
+        assert_eq!(result.observations.days_with_readings, 1);
+        assert_eq!(result.observations.days_below_threshold, 0);
+        assert_eq!(result.observations.peak.unwrap().used_fraction, 0.25);
+        assert_eq!(recorder.catalog(now).unwrap().len(), 2);
+        assert_eq!(fs::read(&file).unwrap(), original);
+    }
+
+    #[test]
+    fn catalog_keeps_provider_and_window_variants_separate_and_uses_latest_labels() {
+        let directory = Directory::new();
+        let recorder = directory.recorder(true);
+        let mut first = reading(&recorder, 1000);
+        let mut catalog = Catalog::default();
+        let key = "a".repeat(64);
+        catalog.observe(make_record(&first, &key)).unwrap();
+        first.fetched_at = 1001;
+        first.limits[0].label = "Renamed window".into();
+        catalog.observe(make_record(&first, &key)).unwrap();
+        first.fetched_at = 1002;
+        first.limits[0].window_seconds = Some(36_000);
+        let mut changed = make_record(&first, &key);
+        catalog.observe(changed.clone()).unwrap();
+        changed.limits[0].provenance = Provenance::LocalEstimate;
+        catalog.observe(changed).unwrap();
+        first.provider = ProviderId::Codex;
+        first.fetched_at = 1003;
+        catalog.observe(make_record(&first, &key)).unwrap();
+        let accounts = catalog.finish();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].provider, ProviderId::Codex);
+        let claude = &accounts[1];
+        assert_eq!(claude.provider, ProviderId::Claude);
+        assert_eq!(claude.first_recorded_at, 1000);
+        assert_eq!(claude.last_recorded_at, 1002);
+        assert_eq!(claude.windows.len(), 3);
+        let original = claude
+            .windows
+            .iter()
+            .find(|window| window.key.window_seconds == Some(18_000))
+            .unwrap();
+        assert_eq!(original.label, "Renamed window");
+        assert_eq!(original.first_recorded_at, 1000);
+        assert_eq!(original.last_recorded_at, 1001);
+    }
+
+    #[test]
+    fn queries_apply_retention_even_before_the_next_cleanup() {
+        use crate::history_query::HistoryRange;
+        let directory = Directory::new();
+        let recorder = directory.recorder(true);
+        let now = 1_790_856_000;
+        let cutoff = now - 30 * 86_400;
+        for at in [cutoff - 1, cutoff, now] {
+            recorder.record(&reading(&recorder, at), at).unwrap();
+        }
+        let restarted = Recorder::new(Some(directory.0.clone()), false, Retention::Days30);
+        let accounts = restarted.catalog(now).unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].first_recorded_at, cutoff);
+        let result = restarted
+            .query(
+                QueryRequest {
+                    provider: ProviderId::Claude,
+                    account_key: accounts[0].account_key.clone(),
+                    limit: accounts[0].windows[0].key.clone(),
+                    range: HistoryRange::AllTime {},
+                },
+                now,
+                20,
+            )
+            .unwrap();
+        assert_eq!(
+            result.days.iter().map(|day| day.sample_count).sum::<u64>(),
+            2
+        );
+        assert_eq!(Store::new(directory.0.clone()).info().unwrap().records, 3);
     }
 }

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, Metadata, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -28,7 +28,7 @@ pub enum Retention {
 }
 
 impl Retention {
-    fn cutoff(self, now: i64) -> Option<i64> {
+    pub(crate) fn cutoff(self, now: i64) -> Option<i64> {
         match self {
             Self::Forever => None,
             Self::Days30 => Some(now.saturating_sub(30 * SECONDS_PER_DAY)),
@@ -184,6 +184,67 @@ impl Store {
             directory,
             files: BTreeMap::new(),
         }
+    }
+
+    pub fn visit_records<E: From<HistoryError>>(
+        &self,
+        from: Option<i64>,
+        until: i64,
+        mut check: impl FnMut() -> Result<(), E>,
+        mut visit: impl FnMut(HistoryRecord) -> Result<(), E>,
+    ) -> Result<(), E> {
+        check()?;
+        for (name, fingerprint) in self.entries(false)? {
+            check()?;
+            let date = date_from_filename(&name).ok_or(HistoryError::InvalidFile)?;
+            let start = date
+                .with_time(time::Time::MIDNIGHT)
+                .assume_utc()
+                .unix_timestamp();
+            if start >= until
+                || from.is_some_and(|from| start.saturating_add(SECONDS_PER_DAY) <= from)
+            {
+                continue;
+            }
+            if fingerprint.bytes > MAX_FILE_BYTES {
+                return Err(HistoryError::TooLarge.into());
+            }
+            let path = self.directory.join(name);
+            let file = open_checked(&path, &fingerprint, false)?;
+            // An external append must not turn a bounded read into a growing stream.
+            let mut reader = BufReader::new(file.take(fingerprint.bytes.saturating_add(1)));
+            let mut line = Vec::new();
+            let mut records = Vec::new();
+            let mut bytes = 0_u64;
+            while read_line(&mut reader, &mut line)? {
+                check()?;
+                bytes += line.len() as u64;
+                if bytes > fingerprint.bytes {
+                    return Err(HistoryError::InvalidFile.into());
+                }
+                if line.last() != Some(&b'\n')
+                    && line.starts_with(b"{\"version\":1,")
+                    && serde_json::from_slice::<serde_json::Value>(&line)
+                        .is_err_and(|error| error.is_eof())
+                {
+                    return Err(HistoryError::InterruptedWrite.into());
+                }
+                let record = parse_record(&line, date)?;
+                if record.observed_at < until && from.is_none_or(|from| record.observed_at >= from)
+                {
+                    records.push(record);
+                }
+            }
+            check_unchanged(&path, &fingerprint)?;
+            // Sorting one bounded file handles clock adjustments and hand-edited records.
+            records.sort_by_key(|record| record.observed_at);
+            for record in records {
+                check()?;
+                visit(record)?;
+            }
+        }
+        check()?;
+        Ok(())
     }
 
     pub fn info(&mut self) -> Result<StoreInfo, HistoryError> {
@@ -706,6 +767,178 @@ mod tests {
         let record: HistoryRecord =
             serde_json::from_slice(&fs::read(path(&directory, NOW)).unwrap()).unwrap();
         assert_eq!(record, reading(NOW));
+    }
+
+    #[test]
+    fn query_reader_sorts_records_and_uses_half_open_bounds_without_writing() {
+        let directory = Directory::new();
+        let mut store = directory.store();
+        let mut empty = Vec::new();
+        store
+            .visit_records::<HistoryError>(
+                None,
+                NOW,
+                || Ok(()),
+                |record| {
+                    empty.push(record);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(empty.is_empty());
+        assert!(!directory.0.exists());
+
+        for at in [NOW + 2, NOW - SECONDS_PER_DAY, NOW, NOW + 1, NOW] {
+            store
+                .append(&reading(at), Retention::Forever, NOW + 2)
+                .unwrap();
+        }
+        let original = fs::read(path(&directory, NOW)).unwrap();
+        let mut times = Vec::new();
+        store
+            .visit_records::<HistoryError>(
+                Some(NOW),
+                NOW + 2,
+                || Ok(()),
+                |record| {
+                    times.push(record.observed_at);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(times, [NOW, NOW, NOW + 1]);
+        assert_eq!(fs::read(path(&directory, NOW)).unwrap(), original);
+    }
+
+    #[test]
+    fn query_reader_skips_unselected_days_but_refuses_corrupt_selected_data() {
+        let directory = Directory::new();
+        let mut store = directory.store();
+        store
+            .append(&reading(NOW), Retention::Forever, NOW)
+            .unwrap();
+        let older = path(&directory, NOW - SECONDS_PER_DAY);
+        fs::write(&older, b"invalid\n").unwrap();
+        let mut count = 0;
+        store
+            .visit_records::<HistoryError>(
+                Some(NOW),
+                NOW + 1,
+                || Ok(()),
+                |_| {
+                    count += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(matches!(
+            store.visit_records::<HistoryError>(None, NOW + 1, || Ok(()), |_| Ok(())),
+            Err(HistoryError::InvalidFile)
+        ));
+        assert_eq!(fs::read(&older).unwrap(), b"invalid\n");
+    }
+
+    #[test]
+    fn query_reader_can_cancel_while_parsing_records_outside_selected_bounds() {
+        let directory = Directory::new();
+        let mut store = directory.store();
+        for at in [NOW - 2, NOW - 1] {
+            store.append(&reading(at), Retention::Forever, NOW).unwrap();
+        }
+        let file = path(&directory, NOW);
+        let original = fs::read(&file).unwrap();
+        let mut checks = 0;
+        let mut visits = 0;
+        let result = store.visit_records::<HistoryError>(
+            Some(NOW),
+            NOW + 1,
+            || {
+                checks += 1;
+                // Cancel on the second line, after the first reading has been filtered out.
+                if checks == 4 {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into());
+                }
+                Ok(())
+            },
+            |_| {
+                visits += 1;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(HistoryError::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted
+        ));
+        assert_eq!(checks, 4);
+        assert_eq!(visits, 0);
+        assert_eq!(fs::read(file).unwrap(), original);
+    }
+
+    #[test]
+    fn query_reader_stops_at_initial_file_size_when_an_external_writer_appends() {
+        let directory = Directory::new();
+        let mut store = directory.store();
+        store
+            .append(&reading(NOW), Retention::Forever, NOW)
+            .unwrap();
+        let file = path(&directory, NOW);
+        let original = fs::read(&file).unwrap();
+        let appended = vec![b'x'; MAX_LINE_BYTES + 1];
+        let mut checks = 0;
+        let mut visits = 0;
+        let result = store.visit_records::<HistoryError>(
+            None,
+            NOW + 1,
+            || {
+                checks += 1;
+                if checks == 3 {
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&file)
+                        .unwrap()
+                        .write_all(&appended)
+                        .unwrap();
+                }
+                Ok(())
+            },
+            |_| {
+                visits += 1;
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(HistoryError::InvalidFile)));
+        assert_eq!(checks, 4);
+        assert_eq!(visits, 0);
+        let saved = fs::read(file).unwrap();
+        assert_eq!(saved.len(), original.len() + appended.len());
+        assert!(saved.starts_with(&original));
+        assert!(saved.ends_with(&appended));
+    }
+
+    #[test]
+    fn query_reader_leaves_interrupted_writes_and_future_formats_untouched() {
+        for (tail, interrupted) in [
+            (b"{\"version\":1,\"provider\":\"clau".as_slice(), true),
+            (b"{\"version\":2,\"future\":true}\n".as_slice(), false),
+        ] {
+            let directory = Directory::new();
+            let mut store = directory.store();
+            store
+                .append(&reading(NOW), Retention::Forever, NOW)
+                .unwrap();
+            let file = path(&directory, NOW);
+            let mut original = fs::read(&file).unwrap();
+            original.extend_from_slice(tail);
+            fs::write(&file, &original).unwrap();
+            let result = store.visit_records::<HistoryError>(None, NOW + 1, || Ok(()), |_| Ok(()));
+            if interrupted {
+                assert!(matches!(result, Err(HistoryError::InterruptedWrite)));
+            } else {
+                assert!(matches!(result, Err(HistoryError::UnsupportedVersion)));
+            }
+            assert_eq!(fs::read(&file).unwrap(), original);
+        }
     }
 
     #[test]

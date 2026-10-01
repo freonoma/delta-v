@@ -2,6 +2,7 @@
 compile_error!("Delta-V currently supports macOS only.");
 
 pub mod auth;
+pub mod calendar;
 mod claude_auth;
 pub mod login_item;
 

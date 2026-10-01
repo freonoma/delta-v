@@ -50,6 +50,12 @@ Keep each pull request focused on one problem. A few conventions matter here:
 
 Parser fixtures live in `src-tauri/tests/fixtures/`. If you change a parser, review the input fixture and expected output together. Do not replace expected output just to make a test pass. Follow the [fixture notes](src-tauri/tests/fixtures/README.md) when adding a response: remove credentials and identifying fields while preserving the structure needed to reproduce the problem.
 
+### History calculations
+
+History queries read saved files only. Keep each provider, account, quota ID, window length, and provenance separate. A daily summary is the highest usage recorded that day, which is also the lowest recorded remaining allowance. It does not measure tokens spent or work completed. Days follow the Mac's current time zone, captured once per query, including daylight saving changes. The 7-day and 30-day periods include today.
+
+Today and single-day queries return individual readings. Longer periods return daily summaries, with empty dates where no readings were saved. Intraday points mark breaks when readings are more than 30 minutes apart, a reset changes or is crossed, usage decreases, or the selected quota disappears from an intervening snapshot. Those markers belong to the original readings, not to connections between daily peaks. Never fill gaps with zeroes or treat a falling percentage as proof of a reset. Observations report recorded extrema, days with readings, and days with a reading below the current remaining-budget threshold.
+
 ## Checking your work
 
 For code changes, run these from the project root:

@@ -1,5 +1,6 @@
 mod credentials;
 mod history;
+mod history_query;
 mod model;
 mod panel_state;
 mod platform;
@@ -21,6 +22,23 @@ async fn get_history_state(app: tauri::AppHandle) -> Result<recording::HistorySt
     tokio::task::spawn_blocking(move || runtime::refresh_history_state(&app))
         .await
         .map_err(|_| "Could not read local history.".to_owned())?
+}
+
+#[tauri::command]
+async fn get_history_catalog(app: tauri::AppHandle) -> Result<runtime::HistoryCatalog, String> {
+    tokio::task::spawn_blocking(move || runtime::history_catalog(&app))
+        .await
+        .map_err(|_| "Could not read saved accounts and usage windows.".to_owned())?
+}
+
+#[tauri::command]
+async fn query_history(
+    app: tauri::AppHandle,
+    request: history_query::QueryRequest,
+) -> Result<history_query::QueryResult, String> {
+    tokio::task::spawn_blocking(move || runtime::query_history(&app, request))
+        .await
+        .map_err(|_| "Could not read usage history.".to_owned())?
 }
 
 #[tauri::command]
@@ -180,6 +198,8 @@ fn main() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_history_state,
+            get_history_catalog,
+            query_history,
             set_history_recording,
             set_history_retention,
             clear_history,
