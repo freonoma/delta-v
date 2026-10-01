@@ -17,6 +17,72 @@ export interface HistoryState {
   provider_issues: { provider: ProviderId; message: string }[];
 }
 
+export interface HistoryLimitKey {
+  id: string;
+  window_seconds: number | null;
+  provenance: Limit["provenance"];
+}
+
+export interface HistoryWindow {
+  key: HistoryLimitKey;
+  label: string;
+  first_recorded_at: number;
+  last_recorded_at: number;
+}
+
+export interface HistoryAccount {
+  provider: ProviderId;
+  account_key: string;
+  first_recorded_at: number;
+  last_recorded_at: number;
+  windows: HistoryWindow[];
+}
+
+export interface HistoryCatalog {
+  accounts: HistoryAccount[];
+  current_accounts: { provider: ProviderId; account_key: string | null; verified_at: number | null }[];
+}
+
+export type HistoryRange = { kind: "today" | "days7" | "days30" | "all_time" } | { kind: "day"; date: string };
+export interface HistoryRequest {
+  provider: ProviderId;
+  account_key: string;
+  limit: HistoryLimitKey;
+  range: HistoryRange;
+}
+
+export type HistoryBreak = "missing_time" | "reset_changed" | "reset_boundary" | "usage_decreased" | "limit_unavailable";
+export interface HistoryPoint {
+  observed_at: number;
+  used_fraction: number;
+  resets_at: number | null;
+  break_before: HistoryBreak[];
+}
+
+export interface HistoryDay {
+  date: string;
+  starts_at: number;
+  ends_at: number;
+  sample_count: number;
+  peak: HistoryPoint | null;
+}
+
+export interface HistoryQuery {
+  request: HistoryRequest;
+  timezone: string;
+  from: number;
+  until: number;
+  days: HistoryDay[];
+  points: HistoryPoint[];
+  observations: {
+    peak: HistoryPoint | null;
+    days_with_readings: number;
+    days_below_threshold: number;
+    days_in_range: number;
+    threshold_remaining: number;
+  };
+}
+
 export interface PanelPreferences {
   pinned: boolean;
   mini: boolean;

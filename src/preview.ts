@@ -1,13 +1,8 @@
 import type { AppState, HistoryState, Limit, LoginItemState, ProviderId, ProviderIssue, ProviderState, Settings } from "./types";
+import { getHistoryPreview } from "./history-preview";
 
 export function createHistoryPreview(settings: Settings): HistoryState {
-  return {
-    recording: settings.history_recording,
-    retention: settings.history_retention,
-    info: { bytes: 0, records: 0, last_recorded_at: null },
-    error: null,
-    provider_issues: [],
-  };
+  return getHistoryPreview().state(settings);
 }
 
 export function createLoginItemPreview(search: string): LoginItemState {
@@ -56,7 +51,7 @@ export function createPreview(search = ""): AppState {
   };
 
   return {
-    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", history_recording: false, history_retention: "forever", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: "system", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
+    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: "system", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
     providers: [
       provider("claude", [
         quota("session", "5-hour", 0.36, 18000, parameters.get("expired") === "1" ? -60 : 8120),

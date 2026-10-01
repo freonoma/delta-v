@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createHistoryPreview } from "./preview";
+import { getHistoryPreview } from "./history-preview";
 import type { HistoryRetention, HistoryState, Settings } from "./types";
 
 const native = isTauri();
@@ -125,9 +126,11 @@ export function HistorySettings({ settings, onChange }: {
     try {
       let next: HistoryState;
       if (preview) {
-        next = action.kind === "clear" ? { ...state, info: { bytes: 0, records: 0, last_recorded_at: null } }
-          : action.kind === "recording" ? { ...state, recording: action.enabled }
-          : { ...state, retention: action.retention };
+        const store = getHistoryPreview();
+        if (action.kind === "clear") store.clear();
+        else if (action.kind === "recording") store.setRecording(action.enabled);
+        else store.setRetention(action.retention);
+        next = store.state(settings);
       } else {
         next = action.kind === "clear" ? await invoke<HistoryState>("clear_history")
           : action.kind === "recording" ? await invoke<HistoryState>("set_history_recording", { enabled: action.enabled })

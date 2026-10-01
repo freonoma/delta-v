@@ -110,7 +110,13 @@ Choose **Until deleted**, **30 days**, or **90 days** under **Keep history**. Tu
 
 History starts with the next successful check after you enable it. Delta-V cannot recover earlier readings or fill gaps while it was closed, locked, or unable to check usage. Accounts are kept separate using an opaque key. If the provider's response cannot identify the account, live usage still works, but that reading is not saved.
 
-The files are plain-text JSONL in `~/.local/share/delta-v/history/`, with one quota snapshot per line. To inspect them, use **Finder → Go → Go to Folder**, paste that path, and open a file in a text editor. Charts and daily summaries are planned. For now, you can inspect the saved readings in these files.
+Open **History**, next to Settings, to browse **Today**, **7 days**, **30 days**, or **All time**. Show Claude, Codex, or both, and choose a usage window for each provider. These filters do not change what the menu bar tracks. If you have used more than one account, you can choose its saved history separately. Delta-V does not save account names or email addresses, so older accounts are listed by the date of their last reading.
+
+Today shows individual readings. Longer periods show the closest recorded reading to the limit on each day, not the amount you used that day. Select a day to inspect its readings. You can also use the arrow keys on a chart and press Enter to open a day. Blank periods have no saved readings; a reset time alone never fills in a new value. Dates follow your Mac's current time zone.
+
+The observations below each chart show the highest recorded usage (or lowest remaining allowance), days with a reading below your low-budget threshold, and days with any readings. They describe the saved samples, not tokens spent or productivity. **Reload** reads the local files again without contacting either provider. **Manage history** opens the recording and retention controls in Settings.
+
+The files are plain-text JSONL in `~/.local/share/delta-v/history/`, with one quota snapshot per line. To inspect them, use **Finder → Go → Go to Folder**, paste that path, and open a file in a text editor.
 
 ## FAQ
 

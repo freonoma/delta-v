@@ -7,6 +7,7 @@ import { createPreview } from "./preview";
 import { Startup, useLoginItem } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistorySettings } from "./HistorySettings";
+import { HistoryView } from "./HistoryView";
 import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
@@ -139,7 +140,7 @@ function amountDescription(amount: Amount): string | null {
   return null;
 }
 
-function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus"; spinning?: boolean }) {
+function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus" | "history"; spinning?: boolean }) {
   return (
     <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
@@ -154,6 +155,7 @@ function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit
       {name === "expand" && <path d="m12 8 5-5m-5 0h5v5M8 12l-5 5m5 0H3v-5" />}
       {name === "plus" && <path d="M10 4v12M4 10h12" />}
       {name === "minus" && <path d="M4 10h12" />}
+      {name === "history" && <path d="M3 3v14h14M6 12l3-5 4 3 4-6" />}
     </svg>
   );
 }
@@ -646,6 +648,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(() => preview ? createPreview(window.location.search) : null);
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [panelPreferences, setPanelPreferences] = useState<PanelPreferences | null>(preview ? defaultPanelPreferences : null);
@@ -671,7 +674,7 @@ export default function App() {
   const { pinned, mini, expanded: miniExpanded, layout: miniLayout } = panelPreferences ?? defaultPanelPreferences;
   const panelReady = state !== null && panelPreferences !== null;
   const panelBusy = !panelReady || panelPending;
-  const miniActive = mini && pinned && !settingsOpen;
+  const miniActive = mini && pinned && !settingsOpen && !historyOpen;
   const dismissStartupPrompt = useCallback(() => {
     setState((current) => current ? {
       ...current, settings: { ...current.settings, launch_at_login_prompt_dismissed: true },
@@ -725,6 +728,7 @@ export default function App() {
       if (!disposed) {
         setExpanded(false);
         setSettingsOpen(false);
+        setHistoryOpen(false);
         setShowDragHint(false);
         setKeyboardNavigation(false);
         window.cancelAnimationFrame(focusFrame.current);
@@ -751,7 +755,7 @@ export default function App() {
     const resize = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        const desiredWidth = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : selection === "both" ? 560 : 340;
+        const desiredWidth = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : historyOpen || selection === "both" ? 560 : 340;
         const width = Math.min(desiredWidth, Math.max(220, window.screen.availWidth - 16));
         const ready = Math.abs(window.innerWidth - width) < 1;
         const chromeHeight = Array.from(element.children)
@@ -779,7 +783,15 @@ export default function App() {
     window.addEventListener("resize", resize);
     resize();
     return () => { observer.disconnect(); window.removeEventListener("resize", resize); window.cancelAnimationFrame(frame); };
-  }, [selection, miniActive, miniLayout, panelReady]);
+  }, [selection, miniActive, miniLayout, panelReady, historyOpen]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (settingsOpen && historyOpen) content.current?.querySelector(".history-settings")?.scrollIntoView({ block: "start" });
+      else content.current?.parentElement?.scrollTo({ top: 0 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [settingsOpen, historyOpen]);
 
   const savePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
     const current = panelPreferencesRef.current;
@@ -817,6 +829,7 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || saving || panelCommandPending.current) return;
       if (settingsOpen) { setSettingsOpen(false); return; }
+      if (historyOpen) { setHistoryOpen(false); return; }
       if (miniActive && miniExpanded) { void changePanelPreferences({ expanded: false }); return; }
       if (!miniActive && expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
@@ -827,7 +840,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences]);
+  }, [settingsOpen, historyOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences]);
 
   async function togglePin() {
     if (panelBusy) return;
@@ -1044,13 +1057,14 @@ export default function App() {
 
   async function openMiniView() {
     if (!await changePanelPreferences({ mini: true })) return;
+    setHistoryOpen(false);
     setShowDragHint(false);
     window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
   }
 
   return (
     <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme} data-pinned={pinned}
-      data-mini={miniActive} data-mini-layout={miniLayout}
+      data-mini={miniActive} data-mini-layout={miniLayout} data-history={historyOpen}
       tabIndex={-1} data-keyboard-navigation={keyboardNavigation}
       onPointerDownCapture={() => {
         window.cancelAnimationFrame(focusFrame.current);
@@ -1075,7 +1089,7 @@ export default function App() {
           {miniActive && <span className="mini-mode">{state?.settings.percentage_mode}</span>}
         </div>
         <div className="header-actions">
-          {!miniActive && <nav className="provider-picker" aria-label="Show providers">
+          {!miniActive && !historyOpen && <nav className="provider-picker" aria-label="Show providers">
             {(["claude", "codex", "both"] as const).map((value) => (
               <button
                 key={value}
@@ -1125,6 +1139,10 @@ export default function App() {
           {state?.paused && <div className="global-notice">Automatic refresh is paused while your screen is locked.</div>}
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
+          {panelReady && historyOpen && state && <div hidden={settingsOpen}>
+            <HistoryView settings={state.settings} providers={state.providers} active={!settingsOpen} onChange={updateHistoryPreferences}
+              onSettings={() => setSettingsOpen(true)} onClose={() => setHistoryOpen(false)} />
+          </div>}
           {panelReady && miniActive && state ? (
             <MiniView providers={displayedProviders} settings={state.settings} now={now} expanded={miniExpanded}
               pending={panelBusy} pendingRecovery={pendingRecovery}
@@ -1136,7 +1154,7 @@ export default function App() {
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
               onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
               onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
-          ) : panelReady && state ? (
+          ) : panelReady && historyOpen ? null : panelReady && state ? (
             <>
               <Startup login={login} mode="prompt" dismissed={state.settings.launch_at_login_prompt_dismissed} />
               <div id="provider-limits" className={`provider-grid${selection === "both" ? " two-providers" : ""}`}>
@@ -1165,6 +1183,7 @@ export default function App() {
         </div>
       </main>
       {!miniActive && <footer className="app-footer">
+        <div className="footer-left">
         <button
           className={`footer-button${settingsOpen ? " active" : ""}`}
           onClick={() => setSettingsOpen(!settingsOpen)}
@@ -1173,11 +1192,17 @@ export default function App() {
         >
           <Icon name="settings" />Settings
         </button>
+        <button className={`footer-button${historyOpen && !settingsOpen ? " active" : ""}`}
+          aria-expanded={historyOpen && !settingsOpen} disabled={panelBusy || saving}
+          onClick={() => { setHistoryOpen(settingsOpen || !historyOpen); setSettingsOpen(false); }}>
+          <Icon name="history" />History
+        </button>
+        </div>
         <div className="footer-right">
-          <button className="footer-button" onClick={() => void refresh()} disabled={panelBusy || refreshing || recovering || changingConnection || !hasConnectedProvider || (!native && !preview)}>
+          {!historyOpen && <><button className="footer-button" onClick={() => void refresh()} disabled={panelBusy || refreshing || recovering || changingConnection || !hasConnectedProvider || (!native && !preview)}>
             <Icon name="refresh" spinning={refreshing} />{refreshing ? "Checking" : "Check now"}
           </button>
-          <span className="footer-divider" />
+          <span className="footer-divider" /></>}
           <button className="footer-button quit-button" onClick={quit} disabled={!native}>
             <Icon name="quit" />Quit
           </button>

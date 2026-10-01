@@ -38,6 +38,8 @@ npm run dev
 
 Open `http://127.0.0.1:1420` in your browser. This preview uses sample data and keeps settings in memory. It does not read credentials or fetch usage. Native tray behaviour, Keychain access, and panel positioning still need to be checked in the macOS app.
 
+For history work, open `http://127.0.0.1:1420/?history=ready`, then click **History**. Other `history` values are `empty`, `paused`, `waiting`, `sparse`, `error`, and `accounts`. These use synthetic readings, including gaps and an earlier account. Recording, retention, and clear controls affect only the in-memory preview; reloading the page restores the selected example.
+
 ## Making changes
 
 Keep each pull request focused on one problem. A few conventions matter here:

@@ -52,6 +52,8 @@ h1, h2, p { margin: 0; }
 }
 
 .popover-shell[data-layout="both"] { width: 560px; }
+.popover-shell[data-history="true"] { width: 560px; }
+.footer-left { display: flex; align-items: center; gap: 2px; }
 
 @media (prefers-color-scheme: dark) {
   .popover-shell:not([data-theme="light"]) {
