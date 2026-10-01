@@ -70,7 +70,7 @@ function ProviderHistory({ provider, catalog, revision, range, settings, enabled
 }) {
   const [selection, setSelection] = useState("current");
   const [chosenWindow, setChosenWindow] = useState<{ account: string; key: string } | null>(null);
-  const [response, setResponse] = useState<{ key: string; value: HistoryQuery | null; error: string | null } | null>(null);
+  const [response, setResponse] = useState<{ key: string; requestKey: string; value: HistoryQuery | null; error: string | null } | null>(null);
   const accounts = catalog.accounts.filter((account) => account.provider === provider);
   const current = catalog.current_accounts.find((account) => account.provider === provider)?.account_key ?? null;
   const accountKey = selection === "current" ? current : selection;
@@ -87,20 +87,32 @@ function ProviderHistory({ provider, catalog, revision, range, settings, enabled
     const read = preview ? Promise.resolve().then(() => getHistoryPreview().query(request, settings.threshold))
       : invoke<HistoryQuery>("query_history", { request });
     void read.then((value) => {
-      if (!disposed) setResponse({ key, value, error: null });
+      if (!disposed) setResponse({ key, requestKey: requestJson, value, error: null });
     }).catch((error: unknown) => {
-      if (!disposed) setResponse({ key, value: null, error: message(error) });
+      if (!disposed) setResponse({ key, requestKey: requestJson, value: null, error: message(error) });
     });
     return () => { disposed = true; };
-    // A response belongs to one exact account, quota, period, and store revision.
+    // Keep the inspected chart through refreshes, but never reuse another account or period.
   }, [requestJson, key, settings.threshold, active, suspended]);
 
-  const result = response?.key === key ? response.value : null;
+  const result = response?.requestKey === requestJson ? response.value : null;
   const failure = response?.key === key ? response.error : null;
   const loading = suspended || (request !== null && response?.key !== key);
   const source = quota?.key.provenance === "official" ? "Official readings"
     : quota?.key.provenance === "local_estimate" ? "Local estimates" : "Unknown source";
-  const missingWindow = chosenWindow?.account === accountKey && !quota;
+  const missingWindow = account !== undefined && chosenWindow?.account === accountKey && !quota;
+  const currentAccountLabel = suspended ? "Checking connected account" : current ? "Current account" : "Current account not verified";
+  const savedAccountHelp = accounts.length > 0 ? "Choose a saved account above to view its history. " : "";
+  const needsRecording = provider === "claude" && !settings.history_recording;
+  const connectionHelp = !enabled
+    ? `Connect ${names[provider]} in Settings${needsRecording ? " and resume recording" : ""} to identify its account.`
+    : needsRecording ? "Resume recording to identify the connected Claude account."
+    : "A successful usage check can identify the connected account.";
+  const emptyAccountHelp = selection !== "current" && !account
+    ? accounts.length > 0 ? "Choose another saved account above." : "No readings remain for this account. Choose Current account above to return to your connected account."
+    : !enabled ? `Connect ${names[provider]} in Settings and turn on recording to save new readings.`
+    : !settings.history_recording ? "Resume recording to save new readings for this account."
+    : "New readings will appear after a successful usage check.";
 
   useLayoutEffect(() => {
     onExport(provider, active && !loading && !failure && result && quota ? {
@@ -123,27 +135,27 @@ function ProviderHistory({ provider, catalog, revision, range, settings, enabled
         {accounts.length > 1 || !current || !account || selection !== "current" ? (
           <label><span className="history-sr-only">{names[provider]} history account</span>
             <select value={selection} onChange={(event) => { setSelection(event.target.value); setChosenWindow(null); }}>
-              <option value="current">{current ? "Current account" : "Current account not verified"}</option>
+              <option value="current">{currentAccountLabel}</option>
               {accounts.filter((saved) => saved.account_key !== current).map((saved, index) => (
                 <option key={saved.account_key} value={saved.account_key}>Saved account {index + 1} · last reading {dateLabel(saved.last_recorded_at)}</option>
               ))}
-              {selection !== "current" && selection === current && <option value={selection}>Saved account · currently connected</option>}
+              {selection !== "current" && selection === current && <option value={selection}>Saved account · {suspended ? "checking connection" : "currently connected"}</option>}
               {selection !== "current" && !account && <option value={selection}>Account no longer saved</option>}
             </select>
           </label>
-        ) : <span>Current account</span>}
+        ) : <span>{currentAccountLabel}</span>}
         {!enabled && <span>Disconnected · saved history</span>}
       </div>
-      {loading ? <div className="history-chart-placeholder" role="status">Reading saved history</div>
+      {loading && !result ? <div className="history-chart-placeholder" role="status">Reading saved history</div>
         : failure ? <div className="history-chart-placeholder history-query-error" role="alert">{failure}</div>
         : !request ? <div className="history-chart-placeholder">
           <strong>{selection === "current" && !current ? "Current account not verified" : missingWindow ? "No saved readings for this window" : "No readings saved for this account"}</strong>
-          <p>{selection === "current" && !current ? "Choose a saved account above to view its history. A successful usage check can identify the connected account."
-            : missingWindow ? "Choose another saved window above." : "New readings will appear after a successful usage check with recording on."}</p>
+          <p>{selection === "current" && !current ? savedAccountHelp + connectionHelp
+            : missingWindow ? "Choose another saved window above." : emptyAccountHelp}</p>
         </div>
         : result && <>
           <HistoryChart key={requestJson} result={result} percentageMode={settings.percentage_mode} onSelectDay={onDay} />
-          <div className="history-chart-source"><span>{source}</span><span>{result.timezone.replaceAll("_", " ")}</span></div>
+          <div className="history-chart-source"><span role="status">{source}{loading ? " · Updating" : ""}</span><span>{result.timezone.replaceAll("_", " ")}</span></div>
           <Observations result={result} mode={settings.percentage_mode} />
         </>}
     </section>

@@ -29,6 +29,26 @@ export function chartPoint(result: HistoryQuery, index: number): HistoryPoint | 
   return dailyChart(result) ? result.days[index]?.peak ?? null : result.points[index] ?? null;
 }
 
+export type ChartSelection = { kind: "day"; date: string } | { kind: "reading"; observedAt: number };
+
+export function chartSelection(result: HistoryQuery, index: number): ChartSelection | null {
+  if (dailyChart(result)) {
+    const day = result.days[index];
+    return day ? { kind: "day", date: day.date } : null;
+  }
+  const point = result.points[index];
+  return point ? { kind: "reading", observedAt: point.observed_at } : null;
+}
+
+export function chartSelectionIndex(result: HistoryQuery, selection: ChartSelection | null): number | null {
+  if (!selection) return null;
+  const index = dailyChart(result) && selection.kind === "day"
+    ? result.days.findIndex((day) => day.date === selection.date)
+    : !dailyChart(result) && selection.kind === "reading"
+      ? result.points.findIndex((point) => point.observed_at === selection.observedAt) : -1;
+  return index < 0 ? null : index;
+}
+
 export function chartX(result: HistoryQuery, index: number, width: number): number {
   const span = Math.max(1, width - PLOT_LEFT - PLOT_RIGHT);
   if (dailyChart(result)) return PLOT_LEFT + (index + 0.5) / Math.max(1, result.days.length) * span;

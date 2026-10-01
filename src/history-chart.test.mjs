@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chartCount, chartDomain, chartIndexAt, chartKeyIndex, chartMarkerIndices,
-  chartPaths, chartPercent, chartPoint, chartTimeTicks, chartX, chartY,
+  chartPaths, chartPercent, chartPoint, chartSelection, chartSelectionIndex, chartTimeTicks, chartX, chartY,
   dailyChart, PLOT_BOTTOM, PLOT_HEIGHT, PLOT_LEFT, PLOT_RIGHT, PLOT_TOP,
   timelineRuns, timestampLabel,
 } from "./history-chart.ts";
@@ -110,6 +110,35 @@ test("keyboard navigation reaches each original reading and stops at range edges
   assert.equal(chartKeyIndex(300, "PageUp", 100_000), 290);
   assert.equal(chartKeyIndex(300, "PageDown", 100_000), 310);
   assert.equal(chartKeyIndex(0, "Tab", 10), null);
+});
+
+test("inspected readings survive appended samples without jumping to the newest reading", () => {
+  const query = result([point(3600, 0.1), point(7200, 0.2)]);
+  const selected = chartSelection(query, 1);
+  const refreshed = result([point(1800, 0.05), ...query.points, point(10800, 0.3)]);
+  assert.equal(chartSelectionIndex(refreshed, selected), 2);
+  assert.equal(chartPoint(refreshed, chartSelectionIndex(refreshed, selected)).observed_at, start + 7200);
+});
+
+test("daily selection follows its date as the range advances and the daily peak changes", () => {
+  const query = daily([day(0), day(1), day(2, point(180000, 0.2))]);
+  const emptySelection = chartSelection(query, 1);
+  const selected = chartSelection(query, 2);
+  const refreshed = daily([day(1), day(2, point(180600, 0.5)), day(3)]);
+  assert.equal(chartSelectionIndex(refreshed, emptySelection), 0);
+  assert.equal(chartSelectionIndex(refreshed, selected), 1);
+  assert.equal(chartPoint(refreshed, 1).used_fraction, 0.5);
+});
+
+test("removed selections and changed chart kinds do not select an unrelated point", () => {
+  const query = result([point(3600, 0.1)]);
+  const days = daily([day(0, query.points[0])]);
+  assert.equal(chartSelectionIndex(result([point(7200, 0.1)]), chartSelection(query, 0)), null);
+  assert.equal(chartSelectionIndex(daily([day(1)]), chartSelection(days, 0)), null);
+  assert.equal(chartSelectionIndex(days, chartSelection(query, 0)), null);
+  assert.equal(chartSelectionIndex(query, chartSelection(days, 0)), null);
+  assert.equal(chartSelectionIndex(result(), null), null);
+  assert.equal(chartSelection(query, -1), null);
 });
 
 test("dense runs retain original extrema and endpoints with bounded per-pixel geometry", () => {

@@ -752,9 +752,13 @@ export default function App() {
     const scrollContent = content.current;
     if (!native || !panelReady || !element || !scrollContent) return;
     let frame = 0;
+    const hasOpenDialog = () => document.querySelector("dialog[open]") !== null;
+    let dialogOpen = hasOpenDialog();
     const resize = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
+        // Background readings must not move the controls in an open dialog.
+        if (hasOpenDialog()) return;
         const desiredWidth = miniActive ? selection === "both" && miniLayout === "columns" ? 336 : 232 : historyOpen || selection === "both" ? 560 : 340;
         const width = Math.min(desiredWidth, Math.max(220, window.screen.availWidth - 16));
         const ready = Math.abs(window.innerWidth - width) < 1;
@@ -780,9 +784,17 @@ export default function App() {
     for (const child of element.children) {
       if (!child.classList.contains("scroll-area")) observer.observe(child);
     }
+    const dialogs = new MutationObserver(() => {
+      const open = hasOpenDialog();
+      if (open === dialogOpen) return;
+      dialogOpen = open;
+      if (open) window.cancelAnimationFrame(frame);
+      else resize();
+    });
+    dialogs.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
     window.addEventListener("resize", resize);
     resize();
-    return () => { observer.disconnect(); window.removeEventListener("resize", resize); window.cancelAnimationFrame(frame); };
+    return () => { observer.disconnect(); dialogs.disconnect(); window.removeEventListener("resize", resize); window.cancelAnimationFrame(frame); };
   }, [selection, miniActive, miniLayout, panelReady, historyOpen]);
 
   useEffect(() => {

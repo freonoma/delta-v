@@ -123,6 +123,7 @@ function ExportDialog({ selection, threshold, onClose }: { selection: ExportSele
 export function HistoryExport({ series, settings, active }: { series: HistoryExportSeries[] | null; settings: Settings; active: boolean }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const trigger = useRef<HTMLElement>(null);
+  const restoreTrigger = useRef(false);
   const [selection, setSelection] = useState<ExportSelection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -131,6 +132,13 @@ export function HistoryExport({ series, settings, active }: { series: HistoryExp
   useEffect(() => {
     if (!active) { setSelection(null); if (menu.current) menu.current.open = false; }
   }, [active]);
+
+  useEffect(() => {
+    if (selection !== null || !restoreTrigger.current) return;
+    restoreTrigger.current = false;
+    // The page stays inert until React removes the modal.
+    if (active) trigger.current?.focus({ preventScroll: true });
+  }, [selection, active]);
 
   useEffect(() => {
     function outside(event: PointerEvent) {
@@ -167,11 +175,11 @@ export function HistoryExport({ series, settings, active }: { series: HistoryExp
       <div className="history-export-options" role="group" aria-label="Export history">
         <button disabled={!ready} onClick={() => begin("image")}>Chart image…</button>
         <button disabled={!ready} onClick={() => begin("csv")}>Export readings…</button>
-        {!ready && <p>Choose an account and a window with saved readings for each selected provider.</p>}
+        {!ready && <p>No readings available to export for this selection.</p>}
         <button className="history-export-folder" disabled={opening} onClick={() => void showFolder()}>Show history folder</button>
       </div>
     </details>
     {error && <p className="history-export-error" role="alert">{error}</p>}
-    {selection && <ExportDialog selection={selection} threshold={settings.threshold} onClose={() => { setSelection(null); trigger.current?.focus(); }} />}
+    {selection && <ExportDialog selection={selection} threshold={settings.threshold} onClose={() => { restoreTrigger.current = true; setSelection(null); }} />}
   </div>;
 }

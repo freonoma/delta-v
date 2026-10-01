@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { HistoryQuery, PercentageMode } from "./types";
+import type { ChartSelection } from "./history-chart";
 import {
   chartCount, chartIndexAt, chartKeyIndex, chartPaths, chartPercent,
-  chartPoint, chartTimeTicks, chartX, chartY, dailyChart, PLOT_BOTTOM, PLOT_HEIGHT, PLOT_LEFT,
+  chartPoint, chartSelection, chartSelectionIndex, chartTimeTicks, chartX, chartY, dailyChart, PLOT_BOTTOM, PLOT_HEIGHT, PLOT_LEFT,
   PLOT_RIGHT, PLOT_TOP, timestampLabel,
 } from "./history-chart";
 import { wholePercent } from "./usage";
@@ -18,13 +19,15 @@ interface Props {
 export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(300);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [hovered, setHovered] = useState<number | null>(null);
+  const [selected, setSelected] = useState<ChartSelection | null>(null);
+  const [hovered, setHovered] = useState<ChartSelection | null>(null);
   const descriptionId = useId();
   const headingId = useId();
   const count = chartCount(result);
   const daily = dailyChart(result);
-  const active = Math.max(-1, Math.min(count - 1, hovered ?? selected ?? count - 1));
+  const selectedIndex = useMemo(() => chartSelectionIndex(result, selected), [result, selected]);
+  const hoveredIndex = useMemo(() => chartSelectionIndex(result, hovered), [result, hovered]);
+  const active = hoveredIndex ?? selectedIndex ?? count - 1;
   const point = chartPoint(result, active);
   const day = daily ? result.days[active] : result.days[0];
   const paths = useMemo(() => chartPaths(result, width, percentageMode), [result, width, percentageMode]);
@@ -62,8 +65,6 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
     return () => resize.disconnect();
   }, []);
 
-  useEffect(() => { setSelected(null); setHovered(null); }, [result]);
-
   const pointerIndex = (event: MouseEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width * width;
@@ -78,7 +79,7 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
     if (next !== null) {
       event.preventDefault();
       setHovered(null);
-      setSelected(next);
+      setSelected(chartSelection(result, next));
     } else if (event.key === "Enter" && daily) {
       event.preventDefault();
       selectDay(active);
@@ -91,11 +92,11 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
       role={count > 0 ? "slider" : "img"} aria-labelledby={headingId} aria-describedby={descriptionId}
       aria-valuemin={count > 0 ? 1 : undefined} aria-valuemax={count > 0 ? count : undefined}
       aria-valuenow={count > 0 ? active + 1 : undefined} aria-valuetext={count > 0 ? accessibleValue : undefined}
-      onKeyDown={keyDown} onFocus={() => setHovered(null)} onPointerMove={(event) => setHovered(pointerIndex(event))}
+      onKeyDown={keyDown} onFocus={() => setHovered(null)} onPointerMove={(event) => setHovered(chartSelection(result, pointerIndex(event)))}
       onPointerLeave={() => setHovered(null)} onClick={(event) => {
         if (event.button !== 0) return;
         const index = pointerIndex(event);
-        setSelected(index);
+        setSelected(chartSelection(result, index));
         if (daily) selectDay(index);
       }}>
       <svg viewBox={`0 0 ${width} ${PLOT_HEIGHT}`} width="100%" height={PLOT_HEIGHT} aria-hidden="true">
