@@ -25,7 +25,7 @@ On a fresh install, the first time you click ΔV, it asks whether to launch at l
 
 ### Updating
 
-Updates are manual for now. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings in place.
+Updates are manual for now. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings and usage history in place.
 
 ### Build from source
 
@@ -247,7 +247,7 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 - [x] Offer a signed, notarized `.dmg` download that installs into Applications.
 - [ ] Add a Homebrew cask for installation and updates.
 - [x] Offer Launch at login during setup and in Settings.
-- [ ] Show today's usage and the last seven days, with history stored on your Mac.
+- [x] Keep quota history on your Mac, with charts and PNG/CSV exports.
 
 Under consideration: API usage and spending in a separate view. API billing would need its own data sources and account setup, and would stay separate from subscription allowances.
 
