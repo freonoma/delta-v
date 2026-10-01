@@ -1,5 +1,8 @@
 pub mod claude;
 pub mod codex;
+mod identity;
+
+pub use identity::IdentityCache;
 
 use std::time::Duration;
 
@@ -105,6 +108,7 @@ pub trait Provider {
 
 pub struct ClaudeProvider<'a> {
     pub client: &'a Client,
+    pub history: Option<&'a IdentityCache>,
 }
 
 pub struct CodexProvider<'a> {
@@ -117,8 +121,12 @@ impl Provider for ClaudeProvider<'_> {
     }
 
     async fn fetch(&self) -> Result<ProviderSnapshot, ProviderError> {
-        let value = fetch_json(self.id(), self.client).await?;
-        claude::parse(value, now()).map_err(ProviderError::Response)
+        let (value, credential) = fetch_json(self.id(), self.client).await?;
+        let mut snapshot = claude::parse(value, now()).map_err(ProviderError::Response)?;
+        if let Some(history) = self.history {
+            snapshot.history_account = history.claude(self.client, &credential.access_token).await;
+        }
+        Ok(snapshot)
     }
 }
 
@@ -128,8 +136,11 @@ impl Provider for CodexProvider<'_> {
     }
 
     async fn fetch(&self) -> Result<ProviderSnapshot, ProviderError> {
-        let value = fetch_json(self.id(), self.client).await?;
-        codex::parse(value, now()).map_err(ProviderError::Response)
+        let (value, _) = fetch_json(self.id(), self.client).await?;
+        let account_key = identity::codex(&value);
+        let mut snapshot = codex::parse(value, now()).map_err(ProviderError::Response)?;
+        snapshot.history_account = account_key;
+        Ok(snapshot)
     }
 }
 
@@ -180,7 +191,10 @@ fn response_error(status: StatusCode, retry_at: Option<i64>) -> Option<ProviderE
     })
 }
 
-async fn fetch_json(id: ProviderId, client: &Client) -> Result<Value, ProviderError> {
+async fn fetch_json(
+    id: ProviderId,
+    client: &Client,
+) -> Result<(Value, credentials::Credential), ProviderError> {
     let mut credential = credentials::load(id).await?;
     for attempt in 0..2 {
         let mut request = client
@@ -227,8 +241,9 @@ async fn fetch_json(id: ProviderId, client: &Client) -> Result<Value, ProviderEr
             }
             bytes.extend_from_slice(&chunk);
         }
-        return serde_json::from_slice(&bytes)
-            .map_err(|_| ProviderError::Response("invalid JSON".into()));
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|_| ProviderError::Response("invalid JSON".into()))?;
+        return Ok((value, credential));
     }
     Err(ProviderError::Authentication)
 }
@@ -241,7 +256,13 @@ mod tests {
     #[ignore = "reads the local Claude sign-in and calls its usage endpoint"]
     async fn live_claude_usage() {
         let client = client().unwrap();
-        let snapshot = ClaudeProvider { client: &client }.fetch().await.unwrap();
+        let snapshot = ClaudeProvider {
+            client: &client,
+            history: None,
+        }
+        .fetch()
+        .await
+        .unwrap();
         assert_eq!(snapshot.provider, ProviderId::Claude);
         assert!(!snapshot.limits.is_empty());
     }

@@ -12,9 +12,11 @@ use tokio::sync::Notify;
 
 use crate::{
     credentials,
+    history::Retention,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
+    recording::{HistoryState, Recorder},
     settings::{self, PercentageMode, Settings},
     tray,
 };
@@ -71,6 +73,8 @@ struct Inner {
 
 pub struct Runtime {
     inner: Mutex<Inner>,
+    history: Recorder,
+    identity: providers::IdentityCache,
     client: reqwest::Client,
     wake: Notify,
     quitting: AtomicBool,
@@ -89,6 +93,14 @@ impl Runtime {
             ),
         };
         Ok(Self {
+            history: Recorder::new(
+                std::env::var_os("HOME").map(|home| {
+                    std::path::PathBuf::from(home).join(".local/share/delta-v/history")
+                }),
+                settings.history_recording,
+                settings.history_retention,
+            ),
+            identity: providers::IdentityCache::default(),
             inner: Mutex::new(Inner {
                 view: AppState {
                     settings,
@@ -152,7 +164,105 @@ fn merge_settings_draft(mut draft: Settings, current: &Settings) -> Settings {
     draft.claude_enabled = current.claude_enabled;
     draft.codex_enabled = current.codex_enabled;
     draft.launch_at_login_prompt_dismissed = current.launch_at_login_prompt_dismissed;
+    draft.history_recording = current.history_recording;
+    draft.history_retention = current.history_retention;
     draft
+}
+
+pub fn history_state(app: &AppHandle) -> Result<HistoryState, String> {
+    app.state::<Runtime>().history.state()
+}
+
+pub fn refresh_history_state(app: &AppHandle) -> Result<HistoryState, String> {
+    let runtime = app.state::<Runtime>();
+    let _ = runtime.history.refresh(providers::now());
+    runtime.history.state()
+}
+
+fn reset_history_connection(app: &AppHandle, provider: ProviderId) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Runtime>()
+            .history
+            .clear_provider_issue(provider);
+        publish_history(&app);
+    });
+}
+
+pub fn set_history_recording(app: &AppHandle, enabled: bool) -> Result<HistoryState, String> {
+    let runtime = app.state::<Runtime>();
+    {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not save history settings.")?;
+        let mut settings = inner.view.settings.clone();
+        settings.history_recording = enabled;
+        settings::save(&settings).map_err(|error| error.to_string())?;
+        runtime.history.set_recording(enabled)?;
+        inner.view.settings = settings;
+        inner.view.settings_error = None;
+    }
+    publish(app);
+    publish_history(app);
+    runtime.wake.notify_one();
+    runtime.history.state()
+}
+
+pub fn set_history_retention(
+    app: &AppHandle,
+    retention: Retention,
+) -> Result<HistoryState, String> {
+    let runtime = app.state::<Runtime>();
+    let result = {
+        let mut inner = runtime
+            .inner
+            .lock()
+            .map_err(|_| "Could not save history settings.")?;
+        let mut settings = inner.view.settings.clone();
+        settings.history_retention = retention;
+        settings::save(&settings).map_err(|error| error.to_string())?;
+        inner.view.settings = settings;
+        inner.view.settings_error = None;
+        runtime.history.set_retention(retention, providers::now())
+    };
+    publish(app);
+    publish_history(app);
+    result?;
+    runtime.history.state()
+}
+
+pub fn clear_history(app: &AppHandle) -> Result<HistoryState, String> {
+    let runtime = app.state::<Runtime>();
+    let result = runtime.history.clear();
+    publish_history(app);
+    result?;
+    runtime.history.state()
+}
+
+fn publish_history(app: &AppHandle) {
+    // Queue events under the same lock as updates so older preferences cannot arrive last.
+    let _ = app.state::<Runtime>().history.with_state(|state| {
+        let _ = app.emit("history-state", state);
+    });
+}
+
+fn record_history(app: &AppHandle, snapshot: Option<ProviderSnapshot>) {
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    if snapshot.history_generation.is_none() {
+        return;
+    }
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let runtime = app.state::<Runtime>();
+        if runtime.quitting.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = runtime.history.record(&snapshot, providers::now());
+        publish_history(&app);
+    });
 }
 
 pub fn dismiss_launch_at_login_prompt(app: &AppHandle) -> Result<(), String> {
@@ -227,9 +337,11 @@ pub fn set_provider_enabled(
         let mut settings = inner.view.settings.clone();
         settings.set_enabled(provider, enabled);
         settings::save(&settings).map_err(|error| error.to_string())?;
+        runtime.history.invalidate();
         change_connection(&mut inner, index, enabled, providers::now());
         inner.view.settings_error = None;
     }
+    reset_history_connection(app, provider);
     publish(app);
     runtime.wake.notify_one();
     Ok(())
@@ -345,7 +457,9 @@ pub fn request_reconnect(
             .lock()
             .map_err(|_| "Could not start account recovery.")?;
         begin_recovery(&mut inner, index, action, cancel.clone(), providers::now())?;
+        runtime.history.invalidate();
     };
+    reset_history_connection(app, provider);
     publish(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -419,7 +533,7 @@ async fn recovery_fetch(
             }
         };
         if ready {
-            return Some(fetch_provider(provider, &runtime.client).await);
+            return Some(fetch_provider(provider, &runtime).await);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -538,7 +652,7 @@ fn finish_recovery(
     issue: Option<Issue>,
 ) {
     let runtime = app.state::<Runtime>();
-    {
+    let accepted = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
@@ -549,9 +663,10 @@ fn finish_recovery(
             result,
             issue,
             providers::now(),
-        );
+        )
     };
     publish(app);
+    record_history(app, accepted);
     runtime.wake.notify_one();
 }
 
@@ -562,7 +677,7 @@ fn complete_recovery(
     result: Option<Result<ProviderSnapshot, ProviderError>>,
     issue: Option<Issue>,
     now: i64,
-) {
+) -> Option<ProviderSnapshot> {
     inner.schedules[index].recovery_cancel = None;
     inner.view.providers[index].recovery = None;
     if !inner
@@ -573,7 +688,7 @@ fn complete_recovery(
         if let Some(Err(error)) = &result {
             preserve_service_wait(&mut inner.schedules[index], error, now);
         }
-        return;
+        return None;
     }
     if let Some(result) = result
         && (!cancelled || result.is_err())
@@ -581,8 +696,9 @@ fn complete_recovery(
         let cadence = inner.schedules[index]
             .cadence
             .max(inner.view.settings.refresh_seconds as i64);
+        let accepted = result.as_ref().ok().cloned();
         apply_result(inner, index, cadence, now, result);
-        return;
+        return accepted;
     }
     let schedule = &mut inner.schedules[index];
     // This wait is local. It must not replace an outstanding service cooldown.
@@ -602,6 +718,7 @@ fn complete_recovery(
     state.snapshot = None;
     state.stale = true;
     state.next_retry_at = Some(schedule.next_due);
+    None
 }
 
 pub fn request_quit(app: &AppHandle) {
@@ -609,6 +726,7 @@ pub fn request_quit(app: &AppHandle) {
     if runtime.quitting.swap(true, Ordering::Relaxed) {
         return;
     }
+    runtime.history.invalidate();
     if let Ok(mut inner) = runtime.inner.lock() {
         for index in 0..PROVIDERS.len() {
             if let Some(cancel) = &inner.schedules[index].recovery_cancel {
@@ -635,6 +753,8 @@ pub fn request_quit(app: &AppHandle) {
                 .unwrap_or(false);
             if !active {
                 platform::finish_panel_drag(&app).await;
+                let history_app = app.clone();
+                let _ = tokio::task::spawn_blocking(move || history_state(&history_app)).await;
                 app.exit(0);
                 return;
             }
@@ -645,8 +765,19 @@ pub fn request_quit(app: &AppHandle) {
 
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
+        let mut next_maintenance = 0;
         loop {
-            tick(&app, platform::activity(), providers::now());
+            let now = providers::now();
+            if now >= next_maintenance {
+                next_maintenance = now.saturating_add(3600);
+                let history_app = app.clone();
+                tokio::task::spawn_blocking(move || {
+                    let runtime = history_app.state::<Runtime>();
+                    let _ = runtime.history.maintain(providers::now());
+                    publish_history(&history_app);
+                });
+            }
+            tick(&app, platform::activity(), now);
             let runtime = app.state::<Runtime>();
             tokio::select! {
                 () = tokio::time::sleep(Duration::from_secs(1)) => {},
@@ -663,6 +794,11 @@ fn interval(settings: &Settings, idle_seconds: Option<f64>) -> i64 {
         _ => 600,
     };
     (settings.refresh_seconds as i64).max(minimum)
+}
+
+fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
+    settings.is_enabled(provider)
+        && (settings.providers.includes(provider) || settings.history_recording)
 }
 
 fn tick(app: &AppHandle, activity: Activity, now: i64) {
@@ -686,9 +822,7 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
                 cancel.store(true, Ordering::Relaxed);
                 inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
             }
-            if !inner.view.settings.providers.includes(provider)
-                || !inner.view.settings.is_enabled(provider)
-            {
+            if !should_poll(&inner.view.settings, provider) {
                 continue;
             }
             if was_paused && !inner.view.paused {
@@ -728,7 +862,6 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
     }
     for (index, provider, generation) in pending {
         let app = app.clone();
-        let client = runtime.client.clone();
         tauri::async_runtime::spawn(async move {
             let current = {
                 let runtime = app.state::<Runtime>();
@@ -751,7 +884,8 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
                 publish(&app);
                 return;
             }
-            let result = fetch_provider(provider, &client).await;
+            let runtime = app.state::<Runtime>();
+            let result = fetch_provider(provider, &runtime).await;
             finish(&app, index, generation, result);
         });
     }
@@ -759,12 +893,23 @@ fn tick(app: &AppHandle, activity: Activity, now: i64) {
 
 async fn fetch_provider(
     provider: ProviderId,
-    client: &reqwest::Client,
+    runtime: &Runtime,
 ) -> Result<ProviderSnapshot, ProviderError> {
-    match provider {
-        ProviderId::Claude => ClaudeProvider { client }.fetch().await,
+    let generation = runtime.history.ticket();
+    let client = &runtime.client;
+    let mut snapshot = match provider {
+        ProviderId::Claude => {
+            ClaudeProvider {
+                client,
+                history: generation.map(|_| &runtime.identity),
+            }
+            .fetch()
+            .await
+        }
         ProviderId::Codex => CodexProvider { client }.fetch().await,
-    }
+    }?;
+    snapshot.history_generation = generation;
+    Ok(snapshot)
 }
 
 fn is_stale(state: &ProviderState, now: i64, cadence: i64) -> bool {
@@ -803,14 +948,15 @@ fn finish(
     result: Result<ProviderSnapshot, ProviderError>,
 ) {
     let runtime = app.state::<Runtime>();
-    {
+    let accepted = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
         let now = providers::now();
-        finish_poll(&mut inner, index, generation, now, result);
+        finish_poll(&mut inner, index, generation, now, result)
     };
     publish(app);
+    record_history(app, accepted);
 }
 
 fn finish_poll(
@@ -819,10 +965,10 @@ fn finish_poll(
     generation: u64,
     now: i64,
     result: Result<ProviderSnapshot, ProviderError>,
-) {
+) -> Option<ProviderSnapshot> {
     let schedule = &mut inner.schedules[index];
     if schedule.poll_generation != Some(generation) {
-        return;
+        return None;
     }
     schedule.poll_generation = None;
     inner.view.providers[index].refreshing = false;
@@ -844,10 +990,12 @@ fn finish_poll(
             inner.view.providers[index].next_retry_at = Some(schedule.blocked_until);
             inner.view.providers[index].error = schedule.cooldown_issue.clone();
         }
-        return;
+        return None;
     }
     let cadence = schedule.cadence;
+    let accepted = result.as_ref().ok().cloned();
     apply_result(inner, index, cadence, now, result);
+    accepted
 }
 
 fn preserve_service_wait(schedule: &mut Schedule, error: &ProviderError, now: i64) {
@@ -1024,6 +1172,38 @@ mod tests {
     use crate::model::Limit;
 
     #[test]
+    fn history_checks_hidden_connections_without_reenabling_disconnected_providers() {
+        let mut settings = Settings {
+            providers: settings::ProviderSelection::Claude,
+            ..Settings::default()
+        };
+        assert!(should_poll(&settings, ProviderId::Claude));
+        assert!(!should_poll(&settings, ProviderId::Codex));
+        settings.history_recording = true;
+        assert!(should_poll(&settings, ProviderId::Codex));
+        settings.codex_enabled = false;
+        assert!(!should_poll(&settings, ProviderId::Codex));
+        settings.history_recording = false;
+        assert!(should_poll(&settings, ProviderId::Claude));
+    }
+
+    #[test]
+    fn only_accepted_successful_polls_are_offered_to_history() {
+        let mut state = inner();
+        let mut snapshot = state.view.providers[0].snapshot.clone().unwrap();
+        snapshot.history_generation = Some(1);
+        snapshot.history_account = Some("a".repeat(64));
+        state.schedules[0].poll_generation = Some(0);
+        let accepted = finish_poll(&mut state, 0, 0, 100, Ok(snapshot.clone())).unwrap();
+        assert_eq!(accepted, snapshot);
+        state.schedules[0].poll_generation = Some(0);
+        assert!(finish_poll(&mut state, 0, 0, 101, Err(ProviderError::Network)).is_none());
+        state.schedules[0].poll_generation = Some(0);
+        change_connection(&mut state, 0, false, 102);
+        assert!(finish_poll(&mut state, 0, 0, 103, Ok(snapshot)).is_none());
+    }
+
+    #[test]
     fn saving_an_open_draft_preserves_immediate_choices() {
         let draft = Settings {
             threshold: 15,
@@ -1034,6 +1214,8 @@ mod tests {
             claude_enabled: false,
             codex_enabled: false,
             launch_at_login_prompt_dismissed: true,
+            history_recording: true,
+            history_retention: Retention::Days90,
             ..Settings::default()
         };
 
@@ -1041,6 +1223,8 @@ mod tests {
         assert!(!saved.claude_enabled);
         assert!(!saved.codex_enabled);
         assert!(saved.launch_at_login_prompt_dismissed);
+        assert!(saved.history_recording);
+        assert_eq!(saved.history_retention, Retention::Days90);
         assert_eq!(saved.threshold, 15);
         assert_eq!(saved.refresh_seconds, 120);
 
@@ -1064,6 +1248,8 @@ mod tests {
                     id: ProviderId::Claude,
                     snapshot: Some(ProviderSnapshot {
                         provider: ProviderId::Claude,
+                        history_account: None,
+                        history_generation: None,
                         plan: None,
                         fetched_at: 100,
                         warnings: vec![],

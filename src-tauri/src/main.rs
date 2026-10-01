@@ -1,8 +1,10 @@
 mod credentials;
+mod history;
 mod model;
 mod panel_state;
 mod platform;
 mod providers;
+mod recording;
 mod runtime;
 mod settings;
 mod tray;
@@ -12,6 +14,40 @@ use tauri::Manager;
 #[tauri::command]
 fn get_state(runtime: tauri::State<'_, runtime::Runtime>) -> Result<runtime::AppState, String> {
     runtime.state()
+}
+
+#[tauri::command]
+async fn get_history_state(app: tauri::AppHandle) -> Result<recording::HistoryState, String> {
+    tokio::task::spawn_blocking(move || runtime::refresh_history_state(&app))
+        .await
+        .map_err(|_| "Could not read local history.".to_owned())?
+}
+
+#[tauri::command]
+async fn set_history_recording(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<recording::HistoryState, String> {
+    tokio::task::spawn_blocking(move || runtime::set_history_recording(&app, enabled))
+        .await
+        .map_err(|_| "Could not change history recording.".to_owned())?
+}
+
+#[tauri::command]
+async fn set_history_retention(
+    app: tauri::AppHandle,
+    retention: history::Retention,
+) -> Result<recording::HistoryState, String> {
+    tokio::task::spawn_blocking(move || runtime::set_history_retention(&app, retention))
+        .await
+        .map_err(|_| "Could not change history retention.".to_owned())?
+}
+
+#[tauri::command]
+async fn clear_history(app: tauri::AppHandle) -> Result<recording::HistoryState, String> {
+    tokio::task::spawn_blocking(move || runtime::clear_history(&app))
+        .await
+        .map_err(|_| "Could not clear local history.".to_owned())?
 }
 
 #[tauri::command]
@@ -143,6 +179,10 @@ fn main() -> tauri::Result<()> {
         .plugin(tauri_nspanel::init())
         .invoke_handler(tauri::generate_handler![
             get_state,
+            get_history_state,
+            set_history_recording,
+            set_history_retention,
+            clear_history,
             refresh_usage,
             reconnect_provider,
             cancel_reconnect,

@@ -102,6 +102,16 @@ The percentages and bar fill change colour when less than 20% remains. When show
 
 Usage updates automatically. **Check now** requests the latest reading; it cannot reset or replenish your allowance.
 
+### Local history
+
+**Settings → Usage history → Record usage history** saves new quota readings on your Mac. Recording starts off. When enabled, it records both connected providers, even if the panel shows only one. The usual refresh interval, idle slowdown, screen-lock pause, and service cooldowns still apply.
+
+Choose **Until deleted**, **30 days**, or **90 days** under **Keep history**. Turning recording off keeps saved readings, but the retention setting still applies while Delta-V is running. Disconnecting a provider stops new readings without deleting its history. **Clear history** deletes saved readings for both providers and earlier accounts after confirmation. These controls take effect immediately.
+
+History starts with the next successful check after you enable it. Delta-V cannot recover earlier readings or fill gaps while it was closed, locked, or unable to check usage. Accounts are kept separate using an opaque key. If the provider's response cannot identify the account, live usage still works, but that reading is not saved.
+
+The files are plain-text JSONL in `~/.local/share/delta-v/history/`, with one quota snapshot per line. To inspect them, use **Finder → Go → Go to Folder**, paste that path, and open a file in a text editor. Charts and daily summaries are planned. For now, you can inspect the saved readings in these files.
+
 ## FAQ
 
 **Does checking usage spend tokens or use up my allowance?**
@@ -143,11 +153,13 @@ Routine usage checks contact these endpoints:
 - [Anthropic usage](https://api.anthropic.com/api/oauth/usage)
 - [OpenAI usage](https://chatgpt.com/backend-api/wham/usage)
 
+With history recording enabled, Delta-V also uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs.
+
 Each provider receives its own saved access token with the request. OpenAI also receives the selected account ID. Credentials stay in the Rust backend and are never passed to the usage panel. Delta-V does not read browser cookies or write credentials.
 
 When you choose **Reconnect** or **Sign in**, Delta-V starts the official client in a temporary folder. That client handles renewal, browser login, and saving its own credentials. It can contact the provider's authentication, configuration, and other startup services as well as the usage endpoints above. Delta-V disables optional telemetry and integrations for these helpers and does not send a model prompt. Recovery only runs when you ask for it.
 
-Delta-V's usage reader does not read conversations, project files, or session logs. Usage readings stay in memory and are lost when you quit. Settings are saved locally.
+Delta-V's usage reader does not read conversations, project files, or session logs. With history off, new usage readings stay in memory and are lost when you quit. Optional history saves timestamps, quota labels and IDs, fractions used, reset times, window lengths, provenance, and an opaque account key. It does not save names, email addresses, tokens, or raw API responses. Settings and any recorded history stay on your Mac.
 
 <details>
 <summary>Files and Keychain items Delta-V reads or writes</summary>
@@ -163,6 +175,7 @@ The app reads these locations:
 | Keychain service `Codex Auth`, account `cli\|<hash>` | Codex sign-in when configured for `keyring` or `auto` |
 | `~/.config/delta-v/config.toml` | Delta-V settings |
 | `~/.config/delta-v/panel.toml` | Pinned view, mini layout and screen position |
+| `~/.local/share/delta-v/history/usage-YYYY-MM-DD.jsonl` | Saved quota readings, if history has been enabled |
 | `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/` | Check for managed Claude settings before running renewal |
 | `/Library/Managed Preferences/com.anthropic.claudecode.plist` and `/Library/Managed Preferences/<username>/com.anthropic.claudecode.plist` | Check for managed Claude preferences before running renewal |
 | `~/.claude/remote-settings.json` | Check for cached Claude account policy before running renewal |
@@ -181,7 +194,9 @@ Delta-V looks for the official clients in common installation locations. If your
 
 Claude's sign-in actions require absolute custom directory paths. Remove empty directory overrides before using them.
 
-Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not write a usage history or a separate copy of your credentials.
+Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not keep a separate copy of your credentials.
+
+Recorded history uses daily `usage-YYYY-MM-DD.jsonl` files in `~/.local/share/delta-v/history/`, grouped by UTC date. The folder is created with access limited to your macOS user, and so are its files. Retention removes readings older than the selected number of 24-hour days when Delta-V runs, including while recording is off. While rewriting a day's file, the app uses `usage-YYYY-MM-DD.<process>.<sequence>.tmp` in the same folder and cleans up interrupted temporary files on the next maintenance pass. Clear history removes these files too; it leaves unrelated files alone.
 
 Launch at login uses macOS's login-item service. Delta-V registers or unregisters its installed app only when you ask. macOS stores that setting; Delta-V saves only whether you dismissed the first-run prompt in its configuration file.
 
@@ -207,6 +222,8 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `threshold` | `20` | Highlight when remaining usage falls below this percentage, from 0 to 100 |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
+| `history_recording` | `false` | Save new quota readings locally for both connected providers |
+| `history_retention` | `"forever"` | `"forever"`, `"days30"`, or `"days90"`; shorter retention also removes older saved readings |
 
 Launch at login is managed by macOS, so it has no on/off value in this file. `launch_at_login_prompt_dismissed` records whether the first-run choice has been handled. It starts as `false` on new installs; existing configuration files without this field skip the prompt.
 

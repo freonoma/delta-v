@@ -14,6 +14,8 @@ pub fn parse(value: Value, fetched_at: i64) -> Result<ProviderSnapshot, String> 
             .map(str::to_owned),
         fetched_at,
         warnings: Vec::new(),
+        history_account: None,
+        history_generation: None,
     };
     for (key, label) in [
         ("rate_limit", ""),

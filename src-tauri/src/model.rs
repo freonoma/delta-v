@@ -53,4 +53,8 @@ pub struct ProviderSnapshot {
     pub plan: Option<String>,
     pub fetched_at: i64,
     pub warnings: Vec<String>,
+    #[serde(skip)]
+    pub history_account: Option<String>,
+    #[serde(skip)]
+    pub history_generation: Option<u64>,
 }

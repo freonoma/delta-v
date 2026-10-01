@@ -28,7 +28,7 @@ npm ci
 npm run tauri -- dev
 ```
 
-The development app appears in the menu bar. It uses your normal Delta-V settings and saved CLI sign-ins, and contacts the providers' usage services. Follow [Connect your accounts](README.md#connect-your-accounts) if needed. An Apple Developer account is not required to run it locally.
+The development app appears in the menu bar. It uses your normal Delta-V settings and saved CLI sign-ins, and contacts the providers' usage services. If you have enabled history, it also uses your normal history folder. Pause recording before a development session if you do not want to add readings. Follow [Connect your accounts](README.md#connect-your-accounts) if needed. An Apple Developer account is not required to run it locally.
 
 For interface work without an account, run this instead:
 

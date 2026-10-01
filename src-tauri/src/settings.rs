@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::ProviderId;
+use crate::{history::Retention, model::ProviderId};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -55,6 +55,8 @@ pub struct Settings {
     pub percentage_mode: PercentageMode,
     pub claude_windows: Vec<String>,
     pub codex_windows: Vec<String>,
+    pub history_recording: bool,
+    pub history_retention: Retention,
 }
 
 impl Default for Settings {
@@ -71,6 +73,8 @@ impl Default for Settings {
             percentage_mode: PercentageMode::Remaining,
             claude_windows: Vec::new(),
             codex_windows: Vec::new(),
+            history_recording: false,
+            history_retention: Retention::Forever,
         }
     }
 }
@@ -207,6 +211,23 @@ mod tests {
         assert!(settings.claude_enabled);
         assert!(settings.codex_enabled);
         assert!(settings.launch_at_login_prompt_dismissed);
+        assert!(!settings.history_recording);
+        assert_eq!(settings.history_retention, Retention::Forever);
+    }
+
+    #[test]
+    fn history_preferences_round_trip_and_reject_unknown_retention() {
+        for retention in [Retention::Forever, Retention::Days30, Retention::Days90] {
+            let settings = Settings {
+                history_recording: true,
+                history_retention: retention,
+                ..Settings::default()
+            };
+            let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert!(restored.history_recording);
+            assert_eq!(restored.history_retention, retention);
+        }
+        assert!(toml::from_str::<Settings>("history_retention = 'yesterday'").is_err());
     }
 
     #[test]

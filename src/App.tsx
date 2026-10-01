@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppState, Amount, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
+import type { AppState, Amount, HistoryState, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
 import { Startup, useLoginItem } from "./Startup";
 import { MiniView } from "./MiniView";
+import { HistorySettings } from "./HistorySettings";
 import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
@@ -475,7 +476,7 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   );
 }
 
-function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, miniLayout, onMiniLayoutChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
+function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, miniLayout, onMiniLayoutChange, onHistoryChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
   state: AppState;
   saving: boolean;
   now: number;
@@ -484,6 +485,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
   login: ReturnType<typeof useLoginItem>;
   miniLayout: MiniLayout;
   onMiniLayoutChange: (layout: MiniLayout) => Promise<void>;
+  onHistoryChange: (history: HistoryState) => void;
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
   onThemePreview: (theme: Theme | null) => void;
@@ -532,7 +534,8 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
       await onSave({
         ...draft, providers: state.settings.providers, claude_enabled: state.settings.claude_enabled,
         codex_enabled: state.settings.codex_enabled, tracked_limit: tracked, threshold: parsedThreshold,
-        refresh_seconds: parsedInterval,
+        refresh_seconds: parsedInterval, history_recording: state.settings.history_recording,
+        history_retention: state.settings.history_retention,
       });
       await onMiniLayoutChange(layoutDraft);
       onClose();
@@ -622,6 +625,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
         <button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving" : "Save settings"}</button>
       </div>
       <Startup login={login} mode="settings" dismissed={state.settings.launch_at_login_prompt_dismissed} />
+      <HistorySettings settings={state.settings} onChange={onHistoryChange} />
       <section className="accounts-settings" aria-label="Accounts">
         <h3>Accounts</h3>
         <p>Changes here apply immediately. Disconnect stops usage checks in Delta-V. It does not sign you out of Claude Code or Codex.</p>
@@ -674,6 +678,12 @@ export default function App() {
     } : current);
   }, []);
   const login = useLoginItem(dismissStartupPrompt);
+  const updateHistoryPreferences = useCallback((history: HistoryState) => {
+    setState((current) => {
+      if (!current || (current.settings.history_recording === history.recording && current.settings.history_retention === history.retention)) return current;
+      return { ...current, settings: { ...current.settings, history_recording: history.recording, history_retention: history.retention } };
+    });
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
@@ -832,13 +842,15 @@ export default function App() {
     try {
       if (preview) setState((current) => current ? {
         ...current, settings: { ...settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
-          launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed },
+          launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed,
+          history_recording: current.settings.history_recording, history_retention: current.settings.history_retention },
       } : current);
       else {
         const saved = await invoke<AppState>("save_settings", { settings });
         setState((current) => current ? {
           ...current, settings: { ...saved.settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
-            launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed },
+            launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed,
+            history_recording: current.settings.history_recording, history_retention: current.settings.history_retention },
           settings_error: saved.settings_error,
         } : saved);
       }
@@ -1118,7 +1130,7 @@ export default function App() {
               pending={panelBusy} pendingRecovery={pendingRecovery}
               onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
           ) : panelReady && settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} onSave={saveSettings}
+            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} onSave={saveSettings} onHistoryChange={updateHistoryPreferences}
               pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
               miniLayout={miniLayout} onMiniLayoutChange={async (layout) => { await savePanelPreferences({ layout }); }}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}

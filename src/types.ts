@@ -3,6 +3,19 @@ export type ProviderSelection = ProviderId | "both";
 export type Theme = "system" | "light" | "dark";
 export type PercentageMode = "remaining" | "used";
 export type MiniLayout = "columns" | "stacked";
+export type HistoryRetention = "forever" | "days30" | "days90";
+
+export interface HistoryState {
+  recording: boolean;
+  retention: HistoryRetention;
+  info: {
+    bytes: number;
+    records: number;
+    last_recorded_at: number | null;
+  };
+  error: string | null;
+  provider_issues: { provider: ProviderId; message: string }[];
+}
 
 export interface PanelPreferences {
   pinned: boolean;
@@ -30,6 +43,8 @@ export interface Settings {
   claude_enabled: boolean;
   codex_enabled: boolean;
   launch_at_login_prompt_dismissed: boolean;
+  history_recording: boolean;
+  history_retention: HistoryRetention;
   tracked_limit: string;
   threshold: number;
   refresh_seconds: number;

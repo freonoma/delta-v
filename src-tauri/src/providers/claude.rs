@@ -13,6 +13,8 @@ pub fn parse(value: Value, fetched_at: i64) -> Result<ProviderSnapshot, String> 
         plan: None,
         fetched_at,
         warnings: Vec::new(),
+        history_account: None,
+        history_generation: None,
     };
     let mut aliases = HashSet::new();
     if let Some(rows) = object.get("limits").filter(|value| !value.is_null()) {

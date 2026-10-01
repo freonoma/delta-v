@@ -267,6 +267,16 @@ h1, h2, p { margin: 0; }
 .startup-switch[aria-checked="true"] span { transform: translateX(12px); background: var(--surface); }
 .startup-caption { margin-top: 7px; color: var(--muted); font-size: 9px; }
 .startup-prompt > .startup-error, .startup-error { color: var(--warning); margin-top: 7px; font-size: 10px; line-height: 1.5; }
+.history-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.history-settings h3 { margin: 0; font-size: 11px; font-weight: 550; }
+.history-introduction { margin: 4px 0 11px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
+.history-retention { padding: 11px 0; }
+.history-storage { margin-top: 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
+.history-storage p + p { margin-top: 3px; }
+.history-storage code { display: block; margin-top: 5px; font-size: 9px; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.history-error, .history-dialog .history-error { color: var(--warning); margin-top: 7px; font-size: 10px; line-height: 1.5; }
+.history-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 5px; }
+.history-actions .text-button { font-size: 10px; padding: 5px 7px; }
 .accounts-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .accounts-settings > h3 { margin: 0; font-size: 11px; font-weight: 550; }
 .accounts-settings > p { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
