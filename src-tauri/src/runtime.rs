@@ -235,6 +235,16 @@ pub fn query_history(
         .map_err(|error| error.to_string())
 }
 
+pub fn export_history_csv(
+    app: &AppHandle,
+    requests: Vec<crate::history_export::ExportRequest>,
+) -> Result<Vec<u8>, String> {
+    app.state::<Runtime>()
+        .history
+        .export_csv(requests, providers::now())
+        .map_err(|error| error.to_string())
+}
+
 pub fn refresh_history_state(app: &AppHandle) -> Result<HistoryState, String> {
     let runtime = app.state::<Runtime>();
     let _ = runtime.history.refresh(providers::now());

@@ -142,10 +142,11 @@ pub struct Accumulator {
     today: Day,
     days: BTreeMap<i64, DailySummary>,
     points: Vec<Point>,
-    intraday: bool,
+    retain_points: bool,
     threshold_remaining: f64,
     pending: Option<Pending>,
     previous: Option<Point>,
+    reset_anchor: Option<i64>,
     limit_unavailable: bool,
 }
 
@@ -194,7 +195,7 @@ impl Accumulator {
             .into_iter()
             .map(|day| (day.starts_at, day.into()))
             .collect();
-        let intraday = matches!(
+        let retain_points = matches!(
             request.range,
             HistoryRange::Today {} | HistoryRange::Day { .. }
         );
@@ -206,16 +207,27 @@ impl Accumulator {
             today,
             days,
             points: Vec::new(),
-            intraday,
+            retain_points,
             threshold_remaining,
             pending: None,
             previous: None,
+            reset_anchor: None,
             limit_unavailable: false,
         })
     }
 
     pub fn reader_boundaries(&self) -> (Option<i64>, i64) {
         (self.from, self.until)
+    }
+
+    pub fn for_export(
+        request: QueryRequest,
+        calendar: Calendar,
+        now: i64,
+    ) -> Result<Self, QueryError> {
+        let mut query = Self::new(request, calendar, now, 0.0)?;
+        query.retain_points = true;
+        Ok(query)
     }
 
     pub fn observe(&mut self, record: HistoryRecord) -> Result<(), QueryError> {
@@ -325,7 +337,12 @@ impl Accumulator {
             if point.observed_at.saturating_sub(previous.observed_at) > GAP_SECONDS {
                 point.break_before.push(BreakReason::MissingTime);
             }
-            if point.resets_at != previous.resets_at {
+            let same_reset = match (self.reset_anchor, point.resets_at) {
+                (Some(anchor), Some(reset)) => anchor.abs_diff(reset) <= 1,
+                (None, None) => true,
+                _ => false,
+            };
+            if !same_reset {
                 point.break_before.push(BreakReason::ResetChanged);
             }
             if previous
@@ -359,11 +376,15 @@ impl Accumulator {
             .ok_or(QueryError::InvalidRange)?;
         summary.sample_count += 1;
         update_peak(&mut summary.peak, &point);
-        if self.intraday {
+        if self.retain_points {
             if self.points.len() >= MAX_POINTS {
                 return Err(QueryError::TooLarge);
             }
             self.points.push(point.clone());
+        }
+        // An anchor tolerates one-second provider jitter without hiding cumulative drift.
+        if self.previous.is_none() || !point.break_before.is_empty() {
+            self.reset_anchor = point.resets_at;
         }
         self.previous = Some(point);
         self.limit_unavailable = false;
@@ -458,6 +479,58 @@ mod tests {
     }
 
     #[test]
+    fn exports_retain_raw_readings_for_every_range_with_the_same_filtering() {
+        let now = timestamp("2026-10-01T12:00:00Z");
+        for range in [
+            HistoryRange::Today {},
+            HistoryRange::Days7 {},
+            HistoryRange::Days30 {},
+            HistoryRange::AllTime {},
+            HistoryRange::Day {
+                date: "2026-10-01".into(),
+            },
+        ] {
+            let mut query =
+                Accumulator::for_export(request(range), Calendar::named("UTC").unwrap(), now)
+                    .unwrap();
+            let first = record(now - 120, 0.123_456_789_012_345_66, None);
+            query.observe(first.clone()).unwrap();
+            query.observe(first).unwrap();
+            let mut other = record(now - 90, 0.9, None);
+            other.account_key = "b".repeat(64);
+            query.observe(other).unwrap();
+            query.observe(record(now - 60, 0.4, None)).unwrap();
+            query.observe(record(now + 1, 0.99, None)).unwrap();
+            let result = query.finish().unwrap();
+            assert_eq!(result.points.len(), 2);
+            assert_eq!(result.points[0].used_fraction, 0.123_456_789_012_345_66);
+            assert_eq!(result.points[1].used_fraction, 0.4);
+        }
+    }
+
+    #[test]
+    fn raw_exports_apply_the_point_limit_to_multiday_ranges() {
+        let now = timestamp("2026-10-01T12:00:00Z");
+        let mut query = Accumulator::for_export(
+            request(HistoryRange::AllTime {}),
+            Calendar::named("UTC").unwrap(),
+            now,
+        )
+        .unwrap();
+        query.points.resize(
+            MAX_POINTS,
+            Point {
+                observed_at: now - 1,
+                used_fraction: 0.1,
+                resets_at: None,
+                break_before: Vec::new(),
+            },
+        );
+        query.observe(record(now, 0.2, None)).unwrap();
+        assert!(matches!(query.finish(), Err(QueryError::TooLarge)));
+    }
+
+    #[test]
     fn exact_thresholds_do_not_become_low_after_floating_point_subtraction() {
         let now = timestamp("2026-10-01T12:00:00Z");
         for threshold in 0..=100 {
@@ -535,6 +608,104 @@ mod tests {
                 .iter()
                 .all(|point| point.observed_at != first + 600)
         );
+    }
+
+    #[test]
+    fn one_second_reset_jitter_preserves_continuity_and_original_timestamps() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        let reset = first + 18_000;
+        let offsets = [0, 1, 0, -1, 1, -1, 0];
+        let mut query = accumulator(HistoryRange::Today {}, first + 3600, 20.0);
+        for (index, offset) in offsets.into_iter().enumerate() {
+            query
+                .observe(record(first + index as i64 * 60, 0.4, Some(reset + offset)))
+                .unwrap();
+        }
+        let result = query.finish().unwrap();
+        assert!(
+            result
+                .points
+                .iter()
+                .all(|point| point.break_before.is_empty())
+        );
+        assert_eq!(
+            result
+                .points
+                .iter()
+                .map(|point| point.resets_at)
+                .collect::<Vec<_>>(),
+            offsets
+                .into_iter()
+                .map(|offset| Some(reset + offset))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_reset_anchor_does_not_hide_cumulative_drift_or_backward_shifts() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        let reset = first + 18_000;
+        let mut query = accumulator(HistoryRange::Today {}, first + 3600, 20.0);
+        for (index, offset) in [0, 1, 2, 3, 0, -1, -2].into_iter().enumerate() {
+            query
+                .observe(record(first + index as i64 * 60, 0.4, Some(reset + offset)))
+                .unwrap();
+        }
+        let result = query.finish().unwrap();
+        for index in [0, 1, 3, 5] {
+            assert!(result.points[index].break_before.is_empty());
+        }
+        for index in [2, 4, 6] {
+            assert_eq!(
+                result.points[index].break_before,
+                [BreakReason::ResetChanged]
+            );
+        }
+    }
+
+    #[test]
+    fn jitter_does_not_hide_rollover_decreases_or_missing_reset_times() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        let reset = first + 120;
+        let mut query = accumulator(HistoryRange::Today {}, first + 3600, 20.0);
+        query.observe(record(first, 0.8, Some(reset))).unwrap();
+        query
+            .observe(record(first + 60, 0.9, Some(reset + 1)))
+            .unwrap();
+        query.observe(record(first + 121, 0.0, None)).unwrap();
+        query.observe(record(first + 180, 0.0, None)).unwrap();
+        query
+            .observe(record(first + 240, 0.0, Some(first + 18_000)))
+            .unwrap();
+        query.observe(record(first + 300, 0.0, None)).unwrap();
+        let result = query.finish().unwrap();
+        assert!(result.points[1].break_before.is_empty());
+        assert_eq!(
+            result.points[2].break_before,
+            [
+                BreakReason::ResetChanged,
+                BreakReason::ResetBoundary,
+                BreakReason::UsageDecreased
+            ]
+        );
+        assert!(result.points[3].break_before.is_empty());
+        assert_eq!(result.points[4].break_before, [BreakReason::ResetChanged]);
+        assert_eq!(result.points[5].break_before, [BreakReason::ResetChanged]);
+    }
+
+    #[test]
+    fn a_crossed_reset_boundary_breaks_continuity_even_with_only_timestamp_jitter() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        for jitter in [-1, 1] {
+            let reset = first + 60;
+            let mut query = accumulator(HistoryRange::Today {}, first + 3600, 20.0);
+            query.observe(record(first, 0.4, Some(reset))).unwrap();
+            query
+                .observe(record(first + 61, 0.4, Some(reset + jitter)))
+                .unwrap();
+            let result = query.finish().unwrap();
+            assert_eq!(result.points[1].break_before, [BreakReason::ResetBoundary]);
+        }
     }
 
     #[test]

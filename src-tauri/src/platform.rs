@@ -4,6 +4,7 @@ compile_error!("Delta-V currently supports macOS only.");
 pub mod auth;
 pub mod calendar;
 mod claude_auth;
+pub mod exports;
 pub mod login_item;
 
 use std::{
@@ -131,13 +132,10 @@ pub fn configure(app: &mut tauri::App) -> tauri::Result<()> {
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Focused(false)) {
-            if popover_pinned(&handle) {
+            if popover_pinned(&handle) || exports::dialog_open() {
                 return;
             }
-            if let Ok(mut last_blur) = handle.state::<PopoverState>().last_blur.lock() {
-                *last_blur = Some(Instant::now());
-            }
-            if let Err(error) = hide_popover(&handle) {
+            if let Err(error) = dismiss_popover(&handle, true) {
                 eprintln!("Could not hide the usage panel: {error}");
             }
         }
@@ -150,11 +148,17 @@ pub fn on_tray_event(app: &AppHandle, event: &TrayIconEvent) {
 }
 
 pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
+    if exports::dialog_open() {
+        return Ok(());
+    }
     app.state::<PopoverState>()
         .restore_pending
         .store(false, Ordering::Relaxed);
     let handle = app.clone();
     app.run_on_main_thread(move || {
+        if exports::dialog_open() {
+            return;
+        }
         let Ok(panel) = handle.get_webview_panel(WINDOW) else {
             eprintln!("Could not find the usage panel");
             return;
@@ -188,14 +192,36 @@ pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn hide_popover(app: &AppHandle) -> tauri::Result<()> {
-    app.state::<PopoverState>()
-        .restore_pending
-        .store(false, Ordering::Relaxed);
+    dismiss_popover(app, false)
+}
+
+fn dismiss_popover(app: &AppHandle, on_blur: bool) -> tauri::Result<()> {
+    if exports::dialog_open() {
+        return Ok(());
+    }
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        if let Ok(panel) = handle.get_webview_panel(WINDOW) {
-            panel.hide();
+        if exports::dialog_open() {
+            return;
         }
+        let Ok(panel) = handle.get_webview_panel(WINDOW) else {
+            return;
+        };
+        // Focus events can arrive after a native dialog has returned focus to the panel.
+        // Check AppKit at dismissal time so an old blur cannot close it again.
+        if on_blur {
+            if popover_pinned(&handle) || !panel.is_visible() || panel.as_panel().isKeyWindow() {
+                return;
+            }
+            if let Ok(mut last_blur) = handle.state::<PopoverState>().last_blur.lock() {
+                *last_blur = Some(Instant::now());
+            }
+        }
+        handle
+            .state::<PopoverState>()
+            .restore_pending
+            .store(false, Ordering::Relaxed);
+        panel.hide();
         if let Err(error) = handle.emit("popover-reset", ()) {
             eprintln!("Could not prepare the usage panel: {error}");
         }

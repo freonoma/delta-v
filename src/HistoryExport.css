@@ -1,0 +1,28 @@
+.history-titlebar > .history-title-actions { gap: 12px; }
+.history-export { position: relative; }
+.history-export-menu summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; font-size: 10px; color: var(--text); background: var(--card); }
+.history-export-menu summary::-webkit-details-marker { display: none; }
+.history-export-menu summary > svg { display: block; flex-shrink: 0; }
+.history-export-options { position: absolute; z-index: 4; right: 0; top: calc(100% + 5px); width: 190px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); box-shadow: 0 5px 18px #0003; }
+.history-export-options button { width: 100%; text-align: left; border: 0; border-radius: 4px; padding: 8px; font-size: 10px; color: var(--text); background: transparent; }
+.history-export-options button:hover:not(:disabled) { background: var(--control); }
+.history-export-options p { padding: 3px 8px 9px; font-size: 9px; line-height: 1.5; color: var(--secondary); }
+.history-export-options .history-export-folder { border-top: 1px solid var(--line); border-radius: 0; margin-top: 3px; }
+.history-export-error { position: absolute; right: 0; z-index: 3; width: 250px; background: var(--card); border: 1px solid var(--warning-border); border-radius: 6px; padding: 9px; color: var(--warning); font-size: 10px; line-height: 1.5; }
+.disconnect-dialog.history-export-dialog { width: 510px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); }
+.history-export-dialog[open] { display: flex; flex-direction: column; }
+.history-export-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-shrink: 0; }
+.history-export-title h3 { margin: 0; }
+.history-export-title .text-button { font-size: 10px; padding: 4px; }
+.history-export-body { overflow-y: auto; min-height: 0; margin: 10px 0 0; }
+.history-export-image { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 5px; }
+.history-export-dialog .history-export-description { font-size: 9px; }
+.history-export-dialog .dialog-actions { flex-shrink: 0; }
+.history-export-selection { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 12px; }
+.history-export-selection li { display: grid; gap: 3px; font-size: 11px; }
+.history-export-selection span { color: var(--secondary); font-size: 10px; }
+.history-export-dialog .history-export-notice { color: var(--success); font-size: 10px; }
+@media (max-width: 420px) {
+  .history-titlebar > .history-title-actions { gap: 5px; }
+  .history-titlebar .history-manage { font-size: 9px; }
+}

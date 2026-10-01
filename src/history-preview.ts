@@ -113,7 +113,7 @@ export function createHistoryPreview(search: string) {
     };
   }
 
-  function query(request: HistoryRequest, threshold: number): HistoryQuery {
+  function query(request: HistoryRequest, threshold: number, originalReadings = false): HistoryQuery {
     if (error) throw new Error(error);
     const selected = readings.filter((reading) => reading.provider === request.provider && reading.account === request.account_key && sameWindow(reading.key, request.limit));
     const today = localDay(new Date(now * 1000));
@@ -131,6 +131,7 @@ export function createHistoryPreview(search: string) {
     else if (kind === "all_time" && selected[0]) first = localDay(new Date(selected[0].observed_at * 1000));
     const from = seconds(first);
     const matches = selected.filter((reading) => reading.observed_at >= from && reading.observed_at < until);
+    if (originalReadings && matches.length > 100_000) throw new Error("This history export is too large. Choose a shorter period.");
     const days: HistoryDay[] = [];
     if (kind !== "all_time" || matches.length > 0) {
       for (let day = first; seconds(day) < until; day = localDay(day, 1)) {
@@ -142,13 +143,42 @@ export function createHistoryPreview(search: string) {
     }
     return {
       request, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, from, until, days,
-      points: kind === "today" || kind === "day" ? matches.map(point) : [],
+      points: originalReadings || kind === "today" || kind === "day" ? matches.map(point) : [],
       observations: {
         peak: highest(matches), days_with_readings: days.filter((day) => day.sample_count > 0).length,
         days_below_threshold: days.filter((day) => day.peak !== null && day.peak.used_fraction > (100 - threshold) / 100).length,
         days_in_range: days.length, threshold_remaining: threshold,
       },
     };
+  }
+
+  function csv(requests: HistoryRequest[], threshold: number): Uint8Array {
+    if (requests.length === 0 || requests.length > 2 || new Set(requests.map((request) => request.provider)).size !== requests.length
+      || requests.some((request) => JSON.stringify(request.range) !== JSON.stringify(requests[0]?.range))) {
+      throw new Error("Choose one or two providers with the same history period.");
+    }
+    const encoder = new TextEncoder();
+    const rows = ["observed_at_utc,timezone,local_date,provider,account_key,limit_id,window_seconds,used_fraction,remaining_fraction,resets_at_utc,provenance,break_before\r\n"];
+    let bytes = encoder.encode(rows[0]).length;
+    const utc = (at: number) => new Date(at * 1000).toISOString().replace(".000Z", "Z");
+    const quote = (value: string) => `"${/^[=+\-@]/.test(value.trimStart()) || /^[\t\r\n]/.test(value) ? "'" : ""}${value.replaceAll('"', '""')}"`;
+    for (const request of requests) {
+      const result = query(request, threshold, true);
+      for (const reading of result.points) {
+        const day = result.days.find((day) => day.starts_at <= reading.observed_at && day.ends_at > reading.observed_at);
+        if (!day) throw new Error("A saved usage reading is invalid.");
+        const row = [
+          utc(reading.observed_at), result.timezone, day.date, request.provider, request.account_key,
+          request.limit.id, request.limit.window_seconds === null ? "" : String(request.limit.window_seconds),
+          String(reading.used_fraction), String(1 - reading.used_fraction), reading.resets_at === null ? "" : utc(reading.resets_at),
+          request.limit.provenance, reading.break_before.join(";"),
+        ].map(quote).join(",") + "\r\n";
+        bytes += encoder.encode(row).length;
+        if (bytes > 32 * 1024 * 1024) throw new Error("This history export is too large. Choose a shorter period.");
+        rows.push(row);
+      }
+    }
+    return encoder.encode(rows.join(""));
   }
 
   function state(_settings: Settings): HistoryState {
@@ -161,7 +191,7 @@ export function createHistoryPreview(search: string) {
   }
 
   return {
-    catalog, query, state,
+    catalog, query, csv, state,
     setRecording(enabled: boolean) { recording = enabled; },
     setRetention(value: HistoryRetention) {
       retention = value;

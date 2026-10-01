@@ -112,11 +112,17 @@ History starts with the next successful check after you enable it. Delta-V canno
 
 Open **History**, next to Settings, to browse **Today**, **7 days**, **30 days**, or **All time**. Show Claude, Codex, or both, and choose a usage window for each provider. These filters do not change what the menu bar tracks. If you have used more than one account, you can choose its saved history separately. Delta-V does not save account names or email addresses, so older accounts are listed by the date of their last reading.
 
-Today shows individual readings. Longer periods show the closest recorded reading to the limit on each day, not the amount you used that day. Select a day to inspect its readings. You can also use the arrow keys on a chart and press Enter to open a day. Blank periods have no saved readings; a reset time alone never fills in a new value. Dates follow your Mac's current time zone.
+Today shows individual readings. Longer periods show the closest recorded reading to the limit on each day, not the amount you used that day. Hover to inspect a day, or click it to see its readings. You can also use the arrow keys on a chart and press Enter to open a day. Blank periods have no saved readings; a reset time alone never fills in a new value. Dates follow your Mac's current time zone.
 
 The observations below each chart show the highest recorded usage (or lowest remaining allowance), days with a reading below your low-budget threshold, and days with any readings. They describe the saved samples, not tokens spent or productivity. **Reload** reads the local files again without contacting either provider. **Manage history** opens the recording and retention controls in Settings.
 
-The files are plain-text JSONL in `~/.local/share/delta-v/history/`, with one quota snapshot per line. To inspect them, use **Finder → Go → Go to Folder**, paste that path, and open a file in a text editor.
+Use **Export → Chart image** to preview the selected charts, then save a PNG or copy it to the clipboard. The image uses your current appearance and percentage preference, includes dates and a small Delta-V mark, and leaves out account keys.
+
+**Export → Export readings** saves a CSV of the original readings for the selected providers, accounts, usage windows and dates. Even for 7 days, 30 days or All time, the CSV contains individual readings rather than daily summaries. It includes UTC timestamps, local dates and time zone, fractions used and remaining, reset times, provenance and opaque account keys. Fractions run from `0` to `1`; `0.25` means 25%. Missing reset times stay blank. Empty periods do not create rows. The CSV is read from disk when you save it, so it can include newer readings from the same dates. If the displayed dates or time zone have changed, Delta-V asks you to refresh first.
+
+Both exports are created locally and saved through the macOS Save dialog. Nothing is uploaded. Pausing recording or clearing history does not remove files you have exported.
+
+**Export → Show history folder** opens the saved files in Finder. They are plain-text JSONL in `~/.local/share/delta-v/history/`, with one quota snapshot per line, and can be inspected in a text editor.
 
 ## FAQ
 
@@ -203,6 +209,8 @@ Claude's sign-in actions require absolute custom directory paths. Remove empty d
 Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not keep a separate copy of your credentials.
 
 Recorded history uses daily `usage-YYYY-MM-DD.jsonl` files in `~/.local/share/delta-v/history/`, grouped by UTC date. The folder is created with access limited to your macOS user, and so are its files. Retention removes readings older than the selected number of 24-hour days when Delta-V runs, including while recording is off. While rewriting a day's file, the app uses `usage-YYYY-MM-DD.<process>.<sequence>.tmp` in the same folder and cleans up interrupted temporary files on the next maintenance pass. Clear history removes these files too; it leaves unrelated files alone.
+
+PNG and CSV exports are written only to the location you choose in the Save dialog. While saving, Delta-V creates a private `.delta-v-export-<process>-<sequence>.tmp` file beside the destination, then replaces it with the finished export. **Copy image** puts the PNG on the macOS clipboard. Neither action contacts a provider or sends the export to the developer.
 
 Launch at login uses macOS's login-item service. Delta-V registers or unregisters its installed app only when you ask. macOS stores that setting; Delta-V saves only whether you dismissed the first-run prompt in its configuration file.
 

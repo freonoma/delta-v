@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import type { HistoryQuery, PercentageMode } from "./types";
 import {
   chartCount, chartIndexAt, chartKeyIndex, chartPaths, chartPercent,
@@ -64,7 +64,7 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
 
   useEffect(() => { setSelected(null); setHovered(null); }, [result]);
 
-  const pointerIndex = (event: PointerEvent<HTMLDivElement>) => {
+  const pointerIndex = (event: MouseEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width * width;
     return chartIndexAt(result, (x - PLOT_LEFT) / (width - PLOT_LEFT - PLOT_RIGHT));
@@ -87,12 +87,12 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
 
   return <div className="history-chart" data-provider={result.request.provider} ref={container}>
     <p className="history-chart-measure" id={headingId}>{measure} <span>(%)</span></p>
-    <div className="history-chart-plot" tabIndex={count > 0 ? 0 : undefined}
+    <div className="history-chart-plot" data-daily={daily} tabIndex={count > 0 ? 0 : undefined}
       role={count > 0 ? "slider" : "img"} aria-labelledby={headingId} aria-describedby={descriptionId}
       aria-valuemin={count > 0 ? 1 : undefined} aria-valuemax={count > 0 ? count : undefined}
       aria-valuenow={count > 0 ? active + 1 : undefined} aria-valuetext={count > 0 ? accessibleValue : undefined}
       onKeyDown={keyDown} onFocus={() => setHovered(null)} onPointerMove={(event) => setHovered(pointerIndex(event))}
-      onPointerLeave={() => setHovered(null)} onPointerDown={(event) => {
+      onPointerLeave={() => setHovered(null)} onClick={(event) => {
         if (event.button !== 0) return;
         const index = pointerIndex(event);
         setSelected(index);
@@ -118,7 +118,6 @@ export function HistoryChart({ result, percentageMode, onSelectDay }: Props) {
     </div>
     <div className="history-chart-inspector">
       <div className="history-chart-reading"><strong>{value}</strong><span>{daily ? `${date} · ${coverage}` : timestamp}</span>
-        {daily && day && <button type="button" onClick={() => selectDay(active)}>View day</button>}
       </div>
       <p className="history-chart-detail">{daily && point ? `Recorded ${timestamp}` : daily && day ? "Nothing was saved for this date." : point ? breakDescription(point.break_before) : "Only saved readings appear here."}</p>
     </div>

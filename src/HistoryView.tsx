@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryChart } from "./HistoryChart";
+import { HistoryExport } from "./HistoryExport";
+import type { HistoryExportSeries } from "./history-export-image";
 import { getHistoryPreview } from "./history-preview";
 import { wholePercent } from "./usage";
 import { chartPercent } from "./history-chart";
@@ -61,9 +63,10 @@ function Observations({ result, mode }: { result: HistoryQuery; mode: Percentage
   );
 }
 
-function ProviderHistory({ provider, catalog, revision, range, settings, enabled, active, suspended, onDay }: {
+function ProviderHistory({ provider, catalog, revision, range, settings, enabled, active, suspended, onDay, onExport }: {
   provider: ProviderId; catalog: HistoryCatalog; revision: number; range: HistoryRange;
   settings: Settings; enabled: boolean; active: boolean; suspended: boolean; onDay: (date: string) => void;
+  onExport: (provider: ProviderId, series: HistoryExportSeries | null) => void;
 }) {
   const [selection, setSelection] = useState("current");
   const [chosenWindow, setChosenWindow] = useState<{ account: string; key: string } | null>(null);
@@ -98,6 +101,12 @@ function ProviderHistory({ provider, catalog, revision, range, settings, enabled
   const source = quota?.key.provenance === "official" ? "Official readings"
     : quota?.key.provenance === "local_estimate" ? "Local estimates" : "Unknown source";
   const missingWindow = chosenWindow?.account === accountKey && !quota;
+
+  useLayoutEffect(() => {
+    onExport(provider, active && !loading && !failure && result && quota ? {
+      label: windowLabel(quota, account?.windows ?? []), accountLabel: selection === "current" ? "Current account" : "Saved account", result,
+    } : null);
+  }, [provider, active, loading, failure, result, quota, account, selection, onExport]);
 
   return (
     <section hidden={!active} className={`history-provider ${provider}`} aria-label={`${names[provider]} history`} aria-busy={loading}>
@@ -155,6 +164,10 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [exportSeries, setExportSeries] = useState<Partial<Record<ProviderId, HistoryExportSeries | null>>>({});
+  const receiveExport = useCallback((provider: ProviderId, series: HistoryExportSeries | null) => {
+    setExportSeries((current) => current[provider] === series ? current : { ...current, [provider]: series });
+  }, []);
   const generation = useRef(0);
   const alive = useRef(false);
   const settingsRef = useRef(settings);
@@ -248,6 +261,11 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
 
   const empty = state !== null && state.info.records === 0 && !state.error;
   const daily = range.kind !== "today" && range.kind !== "day";
+  const selectedProviders: ProviderId[] = selection === "both" ? ["claude", "codex"] : [selection];
+  const selectedSeries = selectedProviders.map((provider) => exportSeries[provider]);
+  const readySeries = active && !empty && !loading && !failure && !state?.error && loadedConnection === connectionKey
+    && selectedSeries.every((series): series is HistoryExportSeries => Boolean(series && JSON.stringify(series.result.request.range) === JSON.stringify(range)))
+    ? selectedSeries : null;
   return (
     <section className="history-view" aria-labelledby="history-title" onKeyDown={(event) => {
       if (event.key === "Escape" && range.kind === "day") { event.stopPropagation(); leaveDay(); }
@@ -256,7 +274,8 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
         <div><button className="icon-button history-back" aria-label="Back to usage" title="Back to usage" onClick={onClose}>
           <svg className="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m11 5-5 5 5 5M6 10h10" /></svg>
         </button><h2 ref={title} tabIndex={-1} id="history-title">Usage history</h2></div>
-        <button className="text-button history-manage" onClick={onSettings}>Manage history</button>
+        <div className="history-title-actions"><button className="text-button history-manage" onClick={onSettings}>Manage history</button>
+          <HistoryExport series={readySeries} settings={settings} active={active} /></div>
       </div>
       <div className="history-filters">
         <nav className="history-segment" aria-label="History providers">{(["claude", "codex", "both"] as const).map((provider) => (
@@ -293,9 +312,9 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
           {(["claude", "codex"] as const).map((provider) => <ProviderHistory key={provider} provider={provider} catalog={catalog}
             revision={loading ? -generation.current : revision} range={range} settings={settings}
             active={active && (selection === "both" || selection === provider)} suspended={loading || loadedConnection !== connectionKey}
-            enabled={provider === "claude" ? settings.claude_enabled : settings.codex_enabled} onDay={inspectDay} />)}
-          <p className="history-explanation">{daily ? "Each point is the closest recorded reading to the limit that day, not the amount used that day. Select a day for its readings."
-            : "Lines stop at gaps, decreases and changed windows. A reset time alone does not create a reading."} Blank periods have no saved readings.</p>
+            enabled={provider === "claude" ? settings.claude_enabled : settings.codex_enabled} onDay={inspectDay} onExport={receiveExport} />)}
+          <p className="history-explanation">{daily ? "Each point is the closest recorded reading to the limit that day, not the amount used that day. Hover to inspect a day, or click to see its readings."
+            : "Lines stop at gaps, drops in reported usage and window changes. A reset time alone does not create a reading."} Blank periods have no saved readings.</p>
           <p className="history-explanation">Observations describe saved readings only. They do not measure tokens spent, time worked or productivity.</p>
         </div>}
     </section>

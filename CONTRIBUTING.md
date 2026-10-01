@@ -58,6 +58,12 @@ History queries read saved files only. Keep each provider, account, quota ID, wi
 
 Today and single-day queries return individual readings. Longer periods return daily summaries, with empty dates where no readings were saved. Intraday points mark breaks when readings are more than 30 minutes apart, a reset changes or is crossed, usage decreases, or the selected quota disappears from an intervening snapshot. Those markers belong to the original readings, not to connections between daily peaks. Never fill gaps with zeroes or treat a falling percentage as proof of a reset. Observations report recorded extrema, days with readings, and days with a reading below the current remaining-budget threshold.
 
+Provider reset timestamps can wobble by one second between readings. Compare them with the first reset timestamp in each continuous segment so that this jitter does not split the line, but cumulative drift still does. Keep the original timestamps in stored readings and CSV exports.
+
+CSV exports use the same account and quota filters but retain original readings for every range. UTC timestamps use RFC 3339, fractions keep their stored precision, and `break_before` contains semicolon-separated reasons. Cells are quoted and potentially executable spreadsheet text is escaped. Exports stop at 100,000 readings per provider or 32 MiB rather than silently truncating data. Date and time-zone changes during the Save dialog require a fresh selection.
+
+PNG exports reuse the chart geometry, with fixed dimensions and no account keys. They include the selected windows, dates, units, provenance and coverage, plus a small Delta-V mark. Check both appearance modes and sparse history. Native Save, overwrite confirmation, Cancel, Copy image and Show history folder need a macOS check, including while pinned. The browser preview downloads synthetic files with a `Sample-` filename prefix and does not access the clipboard or Finder.
+
 ## Checking your work
 
 For code changes, run these from the project root:

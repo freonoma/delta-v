@@ -1,5 +1,6 @@
 mod credentials;
 mod history;
+mod history_export;
 mod history_query;
 mod model;
 mod panel_state;
@@ -39,6 +40,41 @@ async fn query_history(
     tokio::task::spawn_blocking(move || runtime::query_history(&app, request))
         .await
         .map_err(|_| "Could not read usage history.".to_owned())?
+}
+
+#[tauri::command]
+async fn export_history_csv(
+    app: tauri::AppHandle,
+    requests: Vec<history_export::ExportRequest>,
+) -> Result<Option<String>, String> {
+    history_export::validate_export_requests(&requests).map_err(|error| error.to_string())?;
+    let handle = app.clone();
+    platform::exports::save_with(&app, platform::exports::ExportFormat::Csv, move || {
+        runtime::export_history_csv(&handle, requests).map_err(platform::exports::ExportError::Data)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_history_png(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<Option<String>, String> {
+    platform::exports::save(&app, platform::exports::ExportFormat::Png, bytes)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn copy_history_png(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<(), String> {
+    platform::exports::copy_png(&app, bytes)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn show_history_folder(app: tauri::AppHandle) -> Result<(), String> {
+    platform::exports::reveal_history_folder(&app)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -200,6 +236,10 @@ fn main() -> tauri::Result<()> {
             get_history_state,
             get_history_catalog,
             query_history,
+            export_history_csv,
+            save_history_png,
+            copy_history_png,
+            show_history_folder,
             set_history_recording,
             set_history_retention,
             clear_history,

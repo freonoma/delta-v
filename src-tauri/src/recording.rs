@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::{
     history::{HistoryLimit, HistoryRecord, Retention, Store, StoreInfo},
+    history_export::{self, ExportError, ExportRequest},
     history_query::{Accumulator, LimitKey, QueryError, QueryRequest, QueryResult},
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
     platform::calendar::Calendar,
@@ -249,6 +250,34 @@ impl Recorder {
         let result = query.finish()?;
         self.check_epoch(epoch)?;
         Ok(result)
+    }
+
+    pub fn export_csv(
+        &self,
+        requests: Vec<ExportRequest>,
+        now: i64,
+    ) -> Result<Vec<u8>, ExportError> {
+        history_export::validate_export_requests(&requests)?;
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        let inner = self.inner.lock().map_err(|_| QueryError::Unavailable)?;
+        self.check_epoch(epoch)?;
+        let store = inner.store.as_ref().ok_or(QueryError::Unavailable)?;
+        let mut results = Vec::with_capacity(requests.len());
+        for request in requests {
+            let calendar = Calendar::local().map_err(QueryError::from)?;
+            let mut query = Accumulator::for_export(request.request.clone(), calendar, now)?;
+            let (from, until) = query.reader_boundaries();
+            store.visit_records(
+                from.max(inner.view.retention.cutoff(now)),
+                until,
+                || self.check_epoch(epoch),
+                |record| query.observe(record),
+            )?;
+            let result = query.finish()?;
+            request.check_scope(&result)?;
+            results.push(result);
+        }
+        history_export::csv(&results, || self.check_epoch(epoch))
     }
 
     fn check_epoch(&self, expected: u64) -> Result<(), QueryError> {
@@ -738,5 +767,59 @@ mod tests {
             2
         );
         assert_eq!(Store::new(directory.0.clone()).info().unwrap().records, 3);
+    }
+
+    #[test]
+    fn csv_exports_filter_accounts_and_retention_without_mutating_saved_history() {
+        use crate::history_query::HistoryRange;
+        let directory = Directory::new();
+        let recorder = directory.recorder(true);
+        let now = 1_790_856_000;
+        let cutoff = now - 30 * 86_400;
+        for at in [cutoff - 1, cutoff, now - 1, now, now + 1] {
+            recorder.record(&reading(&recorder, at), at).unwrap();
+        }
+        let mut other = reading(&recorder, now);
+        other.history_account = Some("b".repeat(64));
+        other.limits[0].used_fraction = Some(0.876_543_219);
+        recorder.record(&other, now).unwrap();
+        other.provider = ProviderId::Codex;
+        other.history_account = Some("c".repeat(64));
+        other.limits[0].used_fraction = Some(0.5);
+        recorder.record(&other, now).unwrap();
+        let paused = Recorder::new(Some(directory.0.clone()), false, Retention::Days30);
+        let request = QueryRequest {
+            provider: ProviderId::Claude,
+            account_key: "a".repeat(64),
+            limit: LimitKey {
+                id: "session".into(),
+                window_seconds: Some(18_000),
+                provenance: Provenance::Official,
+            },
+            range: HistoryRange::AllTime {},
+        };
+        let mut codex = request.clone();
+        codex.provider = ProviderId::Codex;
+        codex.account_key = "c".repeat(64);
+        let selected = [request, codex]
+            .into_iter()
+            .map(|request| {
+                let displayed = paused.query(request.clone(), now, 20).unwrap();
+                ExportRequest {
+                    request,
+                    timezone: displayed.timezone,
+                    first_date: displayed.days.first().map(|day| day.date.clone()),
+                    last_date: displayed.days.last().map(|day| day.date.clone()),
+                }
+            })
+            .collect();
+        let bytes = paused.export_csv(selected, now).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert_eq!(text.lines().count(), 5);
+        assert_eq!(text.matches("\"claude\"").count(), 3);
+        assert_eq!(text.matches("\"codex\"").count(), 1);
+        assert!(!text.contains("0.876543219"));
+        assert!(!text.contains(&"b".repeat(64)));
+        assert_eq!(Store::new(directory.0.clone()).info().unwrap().records, 7);
     }
 }
