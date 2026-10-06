@@ -104,7 +104,7 @@ This local build uses an ad-hoc signature and is not notarized. Public downloads
 
 For maintainers, the release order is:
 
-1. Run the checks above and confirm that `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version. Prepare the README and release notes, then commit the changes intended for release.
+1. Run the checks above and confirm that `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version. Match the top-level and root-package versions in `package-lock.json` and the `delta-v` package version in `src-tauri/Cargo.lock` too; dependency and test-fixture versions are separate. Prepare any README changes and draft the release description for GitHub, then commit the changes intended for release.
 2. Build for the intended architecture. The first download targets Apple silicon (`aarch64-apple-darwin`). Sign the app and DMG with a **Developer ID Application** certificate, then submit the DMG to Apple for notarization. Follow the [Tauri signing guide](https://v2.tauri.app/distribute/sign/macos/) for signing setup. Keep signing credentials outside the repository.
 3. Check Apple's notarization log, staple the accepted ticket to the DMG, and verify the signatures and Gatekeeper acceptance of both the DMG and its enclosed app. Generate the `.dmg.sha256` checksum after stapling, since stapling changes the file.
 4. Install from that DMG and check normal launch, account connections, saved settings, and launch at login after logging out and back in. Check replacing an older app too. A separate Mac or macOS account helps test a fresh setup. If application code changes, rebuild and repeat signing and verification.
