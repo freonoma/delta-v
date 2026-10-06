@@ -25,7 +25,9 @@ On a fresh install, the first time you click ΔV, it asks whether to launch at l
 
 ### Updating
 
-Updates are manual for now. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings and usage history in place.
+Open **Settings → Updates** to see your installed version. **View releases on GitHub** opens the releases page in your browser. Delta-V does not check for new versions in the background.
+
+Updates are installed manually. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings and usage history in place.
 
 ### Build from source
 

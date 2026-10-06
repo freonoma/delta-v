@@ -687,6 +687,24 @@ pub fn open_setup_instructions(provider: ProviderId) -> Result<(), String> {
     })
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Could not open releases in your browser. Please try again.")]
+pub struct OpenReleasesError;
+
+pub fn open_releases() -> Result<(), OpenReleasesError> {
+    tauri_nspanel::objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::URLWithString(&NSString::from_str(
+            "https://github.com/freonoma/delta-v/releases",
+        ))
+        .ok_or(OpenReleasesError)?;
+        if NSWorkspace::sharedWorkspace().openURL(&url) {
+            Ok(())
+        } else {
+            Err(OpenReleasesError)
+        }
+    })
+}
+
 pub fn read_keychain(service: &str, account: &str) -> Result<String, String> {
     let mut child = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service, "-a", account, "-w"])

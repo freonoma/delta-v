@@ -283,6 +283,14 @@ h1, h2, p { margin: 0; }
 .accounts-settings > h3 { margin: 0; font-size: 11px; font-weight: 550; }
 .accounts-settings > p { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
 .accounts-list { border: 1px solid var(--line); border-radius: 7px; background: var(--card); overflow: hidden; }
+.updates-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.updates-settings h3 { margin: 0; font-size: 11px; font-weight: 550; }
+.updates-version { margin-top: 8px; font-size: 11px; }
+.updates-description { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
+.updates-link { display: inline-block; color: var(--accent); border-radius: 2px; font-size: 10px; text-underline-offset: 3px; }
+.updates-link:hover { text-decoration: none; }
+.updates-link[aria-disabled="true"] { opacity: .6; cursor: progress; }
+.updates-error { color: var(--warning); margin-top: 7px; font-size: 10px; line-height: 1.5; }
 .account-row { padding: 9px 10px; }
 .account-row + .account-row { border-top: 1px solid var(--line); }
 .account-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }

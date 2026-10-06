@@ -8,6 +8,7 @@ import { Startup, useLoginItem } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistorySettings } from "./HistorySettings";
 import { HistoryView } from "./HistoryView";
+import { Updates } from "./Updates";
 import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
@@ -640,6 +641,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
           ))}
         </div>
       </section>
+      <Updates />
     </section>
   );
 }

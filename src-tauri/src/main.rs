@@ -14,6 +14,11 @@ mod tray;
 use tauri::Manager;
 
 #[tauri::command]
+fn get_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
 fn get_state(runtime: tauri::State<'_, runtime::Runtime>) -> Result<runtime::AppState, String> {
     runtime.state()
 }
@@ -140,6 +145,13 @@ async fn open_setup_instructions(provider: model::ProviderId) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn open_releases() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| platform::open_releases().map_err(|error| error.to_string()))
+        .await
+        .map_err(|_| "Could not open releases in your browser. Please try again.".to_owned())?
+}
+
+#[tauri::command]
 async fn get_login_item_state() -> Result<platform::login_item::LoginItemState, String> {
     tokio::task::spawn_blocking(|| platform::login_item::state().map_err(|error| error.to_string()))
         .await
@@ -232,6 +244,7 @@ fn main() -> tauri::Result<()> {
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_nspanel::init())
         .invoke_handler(tauri::generate_handler![
+            get_app_version,
             get_state,
             get_history_state,
             get_history_catalog,
@@ -248,6 +261,7 @@ fn main() -> tauri::Result<()> {
             cancel_reconnect,
             set_provider_enabled,
             open_setup_instructions,
+            open_releases,
             get_login_item_state,
             set_launch_at_login,
             dismiss_launch_at_login_prompt,
