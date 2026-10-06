@@ -10,12 +10,28 @@ mod recording;
 mod runtime;
 mod settings;
 mod tray;
+mod updates;
 
 use tauri::Manager;
 
 #[tauri::command]
 fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+#[tauri::command]
+fn get_update_state(
+    checker: tauri::State<'_, updates::UpdateChecker>,
+) -> Result<updates::UpdateState, updates::UpdateError> {
+    checker.state()
+}
+
+#[tauri::command]
+async fn check_for_updates(
+    app: tauri::AppHandle,
+    checker: tauri::State<'_, updates::UpdateChecker>,
+) -> Result<updates::UpdateState, updates::UpdateError> {
+    checker.check(app.package_info()).await
 }
 
 #[tauri::command]
@@ -245,6 +261,8 @@ fn main() -> tauri::Result<()> {
         .plugin(tauri_nspanel::init())
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            get_update_state,
+            check_for_updates,
             get_state,
             get_history_state,
             get_history_catalog,
@@ -277,6 +295,7 @@ fn main() -> tauri::Result<()> {
         .setup(|app| {
             platform::configure(app)?;
             app.manage(runtime::Runtime::new()?);
+            app.manage(updates::UpdateChecker::default());
             tray::install(app)?;
             runtime::start(app.handle().clone());
             Ok(())
