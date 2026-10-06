@@ -25,7 +25,9 @@ On a fresh install, the first time you click ΔV, it asks whether to launch at l
 
 ### Updating
 
-Open **Settings → Updates** to see your installed version. **View releases on GitHub** opens the releases page in your browser. Delta-V does not check for new versions in the background.
+Open **Settings → Updates** to see your installed version, then choose **Check for updates** to compare it with GitHub's latest published release. You do not need to connect Claude or Codex. Delta-V does not check on startup or in the background, and it does not include prereleases.
+
+The result and the time of the last successful check stay available until you quit Delta-V. If a later check fails, the earlier result is labelled as a previous result. A failed check never means you have the latest release. If GitHub asks Delta-V to wait, the next permitted check time appears; Delta-V does not retry automatically. **View releases on GitHub** remains available and opens the releases page in your browser.
 
 Updates are installed manually. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings and usage history in place.
 
@@ -170,6 +172,8 @@ Routine usage checks contact these endpoints:
 With history recording enabled, Delta-V also uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs.
 
 Each provider receives its own saved access token with the request. OpenAI also receives the selected account ID. Credentials stay in the Rust backend and are never passed to the usage panel. Delta-V does not read browser cookies or write credentials.
+
+Choosing **Check for updates** makes an unauthenticated request to [GitHub's latest release endpoint](https://api.github.com/repos/freonoma/delta-v/releases/latest). GitHub receives your IP address and a fixed `Delta-V` user agent. Delta-V does not send your installed version, account credentials, account identifiers, settings, or usage history with this request. Check results are kept in memory only. Opening **View releases on GitHub** uses your browser and its normal GitHub session.
 
 When you choose **Reconnect** or **Sign in**, Delta-V starts the official client in a temporary folder. That client handles renewal, browser login, and saving its own credentials. It can contact the provider's authentication, configuration, and other startup services as well as the usage endpoints above. Delta-V disables optional telemetry and integrations for these helpers and does not send a model prompt. Recovery only runs when you ask for it.
 

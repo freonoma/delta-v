@@ -9,6 +9,7 @@ import { MiniView } from "./MiniView";
 import { HistorySettings } from "./HistorySettings";
 import { HistoryView } from "./HistoryView";
 import { Updates } from "./Updates";
+import { useUpdates } from "./useUpdates";
 import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const native = isTauri();
@@ -479,13 +480,14 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   );
 }
 
-function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, miniLayout, onMiniLayoutChange, onHistoryChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
+function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, updates, miniLayout, onMiniLayoutChange, onHistoryChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
   state: AppState;
   saving: boolean;
   now: number;
   pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
   pendingConnection: Partial<Record<ProviderId, boolean>>;
   login: ReturnType<typeof useLoginItem>;
+  updates: ReturnType<typeof useUpdates>;
   miniLayout: MiniLayout;
   onMiniLayoutChange: (layout: MiniLayout) => Promise<void>;
   onHistoryChange: (history: HistoryState) => void;
@@ -641,7 +643,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
           ))}
         </div>
       </section>
-      <Updates />
+      <Updates updates={updates} now={now} />
     </section>
   );
 }
@@ -683,6 +685,7 @@ export default function App() {
     } : current);
   }, []);
   const login = useLoginItem(dismissStartupPrompt);
+  const updates = useUpdates();
   const updateHistoryPreferences = useCallback((history: HistoryState) => {
     setState((current) => {
       if (!current || (current.settings.history_recording === history.recording && current.settings.history_retention === history.retention)) return current;
@@ -1162,7 +1165,7 @@ export default function App() {
               pending={panelBusy} pendingRecovery={pendingRecovery}
               onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
           ) : panelReady && settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} onSave={saveSettings} onHistoryChange={updateHistoryPreferences}
+            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} updates={updates} onSave={saveSettings} onHistoryChange={updateHistoryPreferences}
               pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
               miniLayout={miniLayout} onMiniLayoutChange={async (layout) => { await savePanelPreferences({ layout }); }}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}

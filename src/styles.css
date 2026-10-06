@@ -287,6 +287,12 @@ h1, h2, p { margin: 0; }
 .updates-settings h3 { margin: 0; font-size: 11px; font-weight: 550; }
 .updates-version { margin-top: 8px; font-size: 11px; }
 .updates-description { margin: 4px 0 10px; color: var(--secondary); font-size: 9px; line-height: 1.5; }
+.updates-check { padding: 6px 9px; font-size: 10px; }
+.updates-result { margin: 10px 0 12px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.updates-result p + p { margin-top: 4px; }
+.updates-result .updates-error { margin-top: 0; }
+.updates-previous, .updates-wait { color: var(--secondary); }
+.updates-checked { color: var(--muted); font-size: 9px; }
 .updates-link { display: inline-block; color: var(--accent); border-radius: 2px; font-size: 10px; text-underline-offset: 3px; }
 .updates-link:hover { text-decoration: none; }
 .updates-link[aria-disabled="true"] { opacity: .6; cursor: progress; }
