@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
+import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, ReconnectAction, RecoveryPhase, Settings } from "./types";
 import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistoryView } from "./HistoryView";
-import { SettingsPanel } from "./SettingsPanel";
+import { openSettings } from "./settings-navigation";
 import { ProviderFeedback } from "./AccountControls";
 import { Icon } from "./Icon";
+import { BrandMark } from "./BrandMark";
 import { clientNames, issueStatuses, providerEnabled, providerNames, recoveryMessages } from "./provider-display";
 import { errorMessage, native, preview } from "./ui-state";
 import { defaultPanelPreferences, useAppController } from "./useAppController";
@@ -197,15 +198,13 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
 
 export default function App() {
   const {
-    state, error, setError, now, login, updates,
+    state, error, setError, now, login,
     panelPreferences, panelReady, panelBusy, panelCommandPending,
     saving, pendingRecovery, pendingConnection,
-    saveDisplayPreferences, selectProviders, savePanelPreferences, changePanelPreferences,
+    selectProviders, changePanelPreferences,
     updateHistoryPreferences, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
   } = useAppController();
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [showDragHint, setShowDragHint] = useState(false);
   const [keyboardNavigation, setKeyboardNavigation] = useState(false);
@@ -214,9 +213,9 @@ export default function App() {
   const content = useRef<HTMLDivElement>(null);
   const lastSize = useRef("");
   const selection = state?.settings.providers ?? "both";
-  const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
+  const theme = state?.settings.theme ?? "system";
   const { pinned, mini, expanded: miniExpanded, layout: miniLayout } = panelPreferences ?? defaultPanelPreferences;
-  const miniActive = mini && pinned && !settingsOpen && !historyOpen;
+  const miniActive = mini && pinned && !historyOpen;
 
   useEffect(() => {
     if (!native) return;
@@ -230,7 +229,6 @@ export default function App() {
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
-        setSettingsOpen(false);
         setHistoryOpen(false);
         setShowDragHint(false);
         setKeyboardNavigation(false);
@@ -293,28 +291,30 @@ export default function App() {
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      if (settingsOpen && historyOpen) content.current?.querySelector(".history-settings")?.scrollIntoView({ block: "start" });
-      else content.current?.parentElement?.scrollTo({ top: 0 });
+      content.current?.parentElement?.scrollTo({ top: 0 });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [settingsOpen, historyOpen]);
+  }, [historyOpen]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey && event.key === ",") {
+        event.preventDefault();
+        void openSettings().catch((caught: unknown) => setError(errorMessage(caught)));
+        return;
+      }
       if (event.key !== "Escape" || saving || panelCommandPending.current) return;
-      if (settingsOpen) { setSettingsOpen(false); return; }
       if (historyOpen) { setHistoryOpen(false); return; }
       if (miniActive && miniExpanded) { void changePanelPreferences({ expanded: false }); return; }
       if (!miniActive && expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
-        setSettingsOpen(false);
         setExpanded(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, historyOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences]);
+  }, [historyOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences, panelCommandPending, setError]);
 
   async function togglePin() {
     if (panelBusy) return;
@@ -372,10 +372,7 @@ export default function App() {
         void invoke("drag_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       }}>
         <div className="brand" title={pinned ? "Drag to move" : undefined} aria-label={miniActive ? "Delta-V" : undefined}>
-          <svg className="brand-mark" viewBox="0 0 30 18" fill="currentColor" aria-hidden="true">
-            <path d="M.8 15.8 7.8 2.2 14.8 15.8Z M5.4 12.8 7.8 7.7 10.2 12.8Z" fillRule="evenodd" />
-            <path d="M13.8 2.2h3.4l4.2 9.2 4.2-9.2H29l-6.1 13.6h-3Z" />
-          </svg>
+          <BrandMark />
           {!miniActive && <h1>Delta-V</h1>}
           {miniActive && <span className="mini-mode">{state?.settings.percentage_mode}</span>}
         </div>
@@ -407,7 +404,7 @@ export default function App() {
             <Icon name="pin" />
           </button>
           {pinned && <button className="pin-button" aria-label={miniActive ? "Open full view" : "Switch to mini view"}
-            title={miniActive ? "Open full view" : "Switch to mini view"} disabled={panelBusy || saving || settingsOpen}
+            title={miniActive ? "Open full view" : "Switch to mini view"} disabled={panelBusy || saving}
             onClick={() => {
               if (miniActive) void openFullView();
               else void openMiniView();
@@ -430,21 +427,14 @@ export default function App() {
           {state?.paused && <div className="global-notice">Automatic refresh is paused while your screen is locked.</div>}
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
-          {panelReady && historyOpen && state && <div hidden={settingsOpen}>
-            <HistoryView settings={state.settings} providers={state.providers} active={!settingsOpen} onChange={updateHistoryPreferences}
-              onSettings={() => setSettingsOpen(true)} onClose={() => setHistoryOpen(false)} />
+          {panelReady && historyOpen && state && <div>
+            <HistoryView settings={state.settings} providers={state.providers} active onChange={updateHistoryPreferences}
+              onSettings={() => void openSettings("history").catch((caught: unknown) => setError(errorMessage(caught)))} onClose={() => setHistoryOpen(false)} />
           </div>}
           {panelReady && miniActive && state ? (
             <MiniView providers={displayedProviders} settings={state.settings} now={now} expanded={miniExpanded}
               pending={panelBusy} pendingRecovery={pendingRecovery}
               onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
-          ) : panelReady && settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} updates={updates} onSave={saveDisplayPreferences} onHistoryChange={updateHistoryPreferences}
-              pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
-              miniLayout={miniLayout} onMiniLayoutChange={async (layout) => { await savePanelPreferences({ layout }); }}
-              onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
-              onSetEnabled={(id, enabled) => void setProviderEnabled(id, enabled)}
-              onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)} />
           ) : panelReady && historyOpen ? null : panelReady && state ? (
             <>
               <Startup login={login} mode="prompt" dismissed={state.settings.launch_at_login_prompt_dismissed} />
@@ -476,16 +466,16 @@ export default function App() {
       {!miniActive && <footer className="app-footer">
         <div className="footer-left">
         <button
-          className={`footer-button${settingsOpen ? " active" : ""}`}
-          onClick={() => setSettingsOpen(!settingsOpen)}
-          aria-expanded={settingsOpen}
+          className="footer-button"
+          onClick={() => void openSettings().catch((caught: unknown) => setError(errorMessage(caught)))}
+          title="Open Settings (Cmd+,)"
           disabled={panelBusy || saving}
         >
           <Icon name="settings" />Settings
         </button>
-        <button className={`footer-button${historyOpen && !settingsOpen ? " active" : ""}`}
-          aria-expanded={historyOpen && !settingsOpen} disabled={panelBusy || saving}
-          onClick={() => { setHistoryOpen(settingsOpen || !historyOpen); setSettingsOpen(false); }}>
+        <button className={`footer-button${historyOpen ? " active" : ""}`}
+          aria-expanded={historyOpen} disabled={panelBusy || saving}
+          onClick={() => setHistoryOpen(!historyOpen)}>
           <Icon name="history" />History
         </button>
         </div>

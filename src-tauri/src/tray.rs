@@ -3,15 +3,37 @@ use std::sync::OnceLock;
 use tauri::{
     AppHandle,
     image::Image,
-    menu::{Menu, MenuItem},
+    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
 const QUIT_ID: &str = "quit";
+const SETTINGS_ID: &str = "settings";
 
 pub fn install(app: &tauri::App) -> tauri::Result<()> {
+    install_app_menu(app)?;
+    app.on_menu_event(|app, event| match event.id().as_ref() {
+        QUIT_ID => {
+            if let Err(error) = crate::settings_window::request_quit(app) {
+                eprintln!("Could not quit Delta-V: {error}");
+            }
+        }
+        SETTINGS_ID => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = crate::settings_window::open(&app, None, false).await {
+                    eprintln!("{error}");
+                }
+            });
+        }
+        _ => {}
+    });
+    let settings = MenuItem::with_id(app, SETTINGS_ID, "Settings...", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, QUIT_ID, "Quit Delta-V", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&settings, &PredefinedMenuItem::separator(app)?, &quit],
+    )?;
 
     TrayIconBuilder::with_id("main")
         .icon(mark())
@@ -35,13 +57,72 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
                 eprintln!("Could not open the usage panel: {error}");
             }
         })
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == QUIT_ID {
-                crate::runtime::request_quit(app);
-            }
-        })
         .build(app)?;
     crate::platform::style_tray(app.handle())
+}
+
+fn install_app_menu(app: &tauri::App) -> tauri::Result<()> {
+    let app_menu = Submenu::with_items(
+        app,
+        "Delta-V",
+        true,
+        &[
+            &PredefinedMenuItem::about(
+                app,
+                Some("About Delta-V"),
+                Some(AboutMetadata {
+                    name: Some("Delta-V".to_owned()),
+                    version: Some(app.package_info().version.to_string()),
+                    ..Default::default()
+                }),
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, SETTINGS_ID, "Settings...", true, Some("CmdOrCtrl+,"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, QUIT_ID, "Quit Delta-V", true, Some("CmdOrCtrl+Q"))?,
+        ],
+    )?;
+    let file_menu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[&PredefinedMenuItem::close_window(app, None)?],
+    )?;
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let window_menu = Submenu::with_id_and_items(
+        app,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+        ],
+    )?;
+    app.set_menu(Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &window_menu],
+    )?)?;
+    Ok(())
 }
 
 pub fn update(

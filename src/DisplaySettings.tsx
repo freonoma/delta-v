@@ -76,8 +76,8 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
       <div className="compact-settings">
         <h3>Compact view</h3>
         <p>Choose up to two windows per provider. Show more reveals the rest.</p>
-        <div className={`window-picker-grid${state.settings.providers === "both" ? " two-providers" : ""}`}>
-          {state.providers.filter((provider) => state.settings.providers === "both" || state.settings.providers === provider.id).map((provider) => {
+        <div className="window-picker-grid two-providers">
+          {state.providers.map((provider) => {
             const key = provider.id === "claude" ? "claude_windows" : "codex_windows";
             return <WindowPicker key={provider.id} provider={provider} selected={draft[key]} onChange={(windows) => setDraft({ ...draft, [key]: windows })} />;
           })}
@@ -106,14 +106,14 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
       <label className="setting-row">
         <span>Low budget threshold<small>Highlight when less than this percentage remains</small></span>
         <span className="number-field">
-          <input type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+          <input name="threshold" type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
           <span>%</span>
         </span>
       </label>
       <label className="setting-row">
         <span>Refresh interval<small>Backoff applies when rate limited</small></span>
         <span className="number-field">
-          <input type="number" min="30" max="900" step="1" inputMode="numeric" value={interval} onChange={(event) => setIntervalValue(event.target.value)} />
+          <input name="interval" type="number" min="30" max="900" step="1" inputMode="numeric" value={interval} onChange={(event) => setIntervalValue(event.target.value)} />
           <span>sec</span>
         </span>
       </label>

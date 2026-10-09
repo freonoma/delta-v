@@ -19,13 +19,13 @@ Delta-V needs macOS 13.3 or newer. The first download is for **Apple silicon Mac
 
 The release DMG is signed with an Apple Developer ID and notarized by Apple.
 
-Look for **ΔV in the menu bar at the top of your screen**, near the clock. It does not open a regular window or appear in the Dock. Click it to see usage, then follow [Connect your accounts](#connect-your-accounts) if needed.
+Look for **ΔV in the menu bar at the top of your screen**, near the clock. It starts quietly and does not appear in the Dock. Click it to see usage, then follow [Connect your accounts](#connect-your-accounts) if needed. Settings opens in its own window.
 
-On a fresh install, the first time you click ΔV, it asks whether to launch at login. Choose **Enable** or **Not now**. You can change this later under **Settings → Startup**.
+On a fresh install, the first time you click ΔV, it asks whether to launch at login. Choose **Enable** or **Not now**. You can change this later under **Settings → App → Startup**.
 
 ### Updating
 
-Open **Settings → Updates** to see your installed version, then choose **Check for updates** to compare it with GitHub's latest published release. You do not need to connect Claude or Codex. Delta-V does not check on startup or in the background, and it does not include prereleases.
+Open **Settings → App → Updates** to see your installed version, then choose **Check for updates** to compare it with GitHub's latest published release. You do not need to connect Claude or Codex. Delta-V does not check on startup or in the background, and it does not include prereleases.
 
 The result and the time of the last successful check stay available until you quit Delta-V. If a later check fails, the earlier result is labelled as a previous result. A failed check never means you have the latest release. If GitHub asks Delta-V to wait, the next permitted check time appears; Delta-V does not retry automatically. **View releases on GitHub** remains available and opens the releases page in your browser.
 
@@ -76,39 +76,43 @@ You can also sign in yourself in Terminal: run `claude auth login` for Claude, o
 - **Connect** resumes checks using the CLI's saved sign-in.
 - **Sign in again** opens the official sign-in flow, including for changing accounts. This also changes the account saved for Claude Code or Codex. Delta-V explains this before you continue.
 
-Account actions take effect immediately, without **Save settings**. Cancelling the settings form does not undo them. A usage request already in progress may finish after disconnecting, but its reading is discarded.
+Account actions take effect immediately, without **Save changes**. Discarding display changes does not undo them. A usage request already in progress may finish after disconnecting, but its reading is discarded.
 
 ## Using it
 
 Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses which providers you see. **Show more** reveals additional windows, credits, and provider details. Clicking outside closes the panel; the next opening starts compact again.
 
-Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes settings or expanded details first, then hides the panel.
+Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes History or expanded details first, then hides the panel.
+
+Choose **Settings** in the panel, right-click ΔV and choose **Settings**, or press **Cmd+,** while Delta-V is active. The same Settings window comes forward each time. Its sidebar has **Display & usage**, **Accounts**, **History**, and **App** sections. Switching sections keeps unsaved display changes. Reopening Settings restores the last section until you quit Delta-V.
+
+Opening Settings from the panel keeps your place. Closing it returns to the same usage or History view, including expanded details and scroll position. **Back to panel** also returns there. If you opened Settings from the menu while the panel was hidden, closing Settings leaves the panel hidden.
+
+Use **Save changes** to apply display preferences, or **Discard changes** to restore the saved values. Closing Settings with the red close button, **Cmd+W**, or Escape asks what to do if display changes are unsaved. Quitting Delta-V does too. Account, history and launch-at-login actions apply immediately and are not undone by discarding display changes.
 
 Delta-V remembers the pin, view and position when you quit. A pinned panel returns when the app launches, without taking keyboard focus. If its monitor is disconnected, it moves onto an available screen. Unpin it before quitting if you want Delta-V to start quietly in the menu bar.
 
-Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Mini layout**. Delta-V remembers the layout and whether the second window is expanded.
+Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Display & usage → Mini layout**. Delta-V remembers the layout and whether the second window is expanded.
 
-Mini view uses the same first and second windows as **Settings → Compact view**. If another limit is running low, a warning stays visible even when that limit is hidden. Click it to see the limit. Stale readings remain labelled, and **Open details** takes you to connection controls when needed.
+Mini view uses the same first and second windows as **Settings → Display & usage → Compact view**. If another limit is running low, a warning stays visible even when that limit is hidden. Click it to see the limit. Stale readings remain labelled, and **Open details** takes you to connection controls when needed.
 
-Under **Settings → Compact view**, choose a first and optional second window for each provider. For example, show Claude's five-hour window alongside its weekly model limit, and choose different windows for Codex. **Automatic** lets Delta-V choose. These settings control the compact rows. Show more always reveals all reported limits the app understands.
+Under **Settings → Display & usage → Compact view**, choose a first and optional second window for each provider. For example, show Claude's five-hour window alongside its weekly model limit, and choose different windows for Codex. **Automatic** lets Delta-V choose. These settings control the compact rows. Show more always reveals all reported limits the app understands.
 
-Percentages show **remaining** usage by default. A window at 55% used has 45% remaining. Under **Settings → Show percentages as**, choose **Used** if you prefer. This changes the menu bar, the large provider percentages, and the usage bars together.
+Percentages show **remaining** usage by default. A window at 55% used has 45% remaining. Under **Settings → Display & usage → Show percentages as**, choose **Used** if you prefer. This changes the menu bar, the large provider percentages, and the usage bars together.
 
-By default, the menu bar tracks the most-used available window among the selected providers. **Settings → Menu bar tracks** lets you choose a particular five-hour, weekly, or model-specific window instead. Each provider's large percentage shows its most-used window, unless you track a specific one from that provider.
+By default, the menu bar tracks the most-used available window among the selected providers. **Settings → Display & usage → Menu bar tracks** lets you choose a particular five-hour, weekly, or model-specific window instead. Each provider's large percentage shows its most-used window, unless you track a specific one from that provider.
 
 The percentages and bar fill change colour when less than 20% remains. When showing remaining usage, the bar is empty at 0%, so the warning colour appears on the numbers. You can change the threshold in Settings. It always refers to what remains, even when you choose to display the percentage used. The menu bar icon itself follows the normal macOS colour.
 
-**Appearance** offers Light, Dark, or System, which follows your Mac's appearance. Changes preview immediately. **Save settings** keeps them; **Cancel** or closing the panel restores the saved appearance.
+**Appearance**, under **Display & usage**, offers Light, Dark, or System, which follows your Mac's appearance. Changes preview in the Settings window. **Save changes** applies them to the usage panel too; **Discard changes** restores the saved appearance.
 
-**Settings → Startup → Launch at login** opens Delta-V when you log in to your Mac. A saved pinned panel reappears; otherwise, the app starts quietly in the menu bar. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
-
-<img src="screenshots/settings.png" alt="Delta-V settings for per-provider windows, menu bar tracking, percentage display, threshold, refresh interval, and appearance" width="560">
+**Settings → App → Startup → Launch at login** opens Delta-V when you log in to your Mac. A saved pinned panel reappears; otherwise, the app starts quietly in the menu bar. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
 
 Usage updates automatically. **Check now** requests the latest reading; it cannot reset or replenish your allowance.
 
 ### Local history
 
-**Settings → Usage history → Record usage history** saves new quota readings on your Mac. Recording starts off. When enabled, it records both connected providers, even if the panel shows only one. The usual refresh interval, idle slowdown, screen-lock pause, and service cooldowns still apply.
+**Settings → History → Record usage history** saves new quota readings on your Mac. Recording starts off. When enabled, it records both connected providers, even if the panel shows only one. The usual refresh interval, idle slowdown, screen-lock pause, and service cooldowns still apply.
 
 Choose **Until deleted**, **30 days**, or **90 days** under **Keep history**. Turning recording off keeps saved readings, but the retention setting still applies while Delta-V is running. Disconnecting a provider stops new readings without deleting its history. **Clear history** deletes saved readings for both providers and earlier accounts after confirmation. These controls take effect immediately.
 
@@ -150,7 +154,7 @@ Renewal stays with the official client. For Claude, Delta-V uses its built-in `/
 
 **Does it start when I log in to my Mac?**
 
-Only if you enable **Launch at login**, either from the first-run prompt or in **Settings → Startup**. Run the installed app from **Applications** or your home folder's **Applications** folder to use this option. Turning it off prevents future login launches without quitting the running app.
+Only if you enable **Launch at login**, either from the first-run prompt or in **Settings → App → Startup**. Run the installed app from **Applications** or your home folder's **Applications** folder to use this option. Turning it off prevents future login launches without quitting the running app.
 
 ## Where the numbers come from
 
@@ -226,7 +230,7 @@ Sign-in helpers use a private `delta-v-auth-*` folder in the macOS temporary dir
 
 ## Configuration
 
-All settings are available in the usage panel. You do not need to edit a file.
+Open Settings from the usage panel to configure the app. You do not need to edit a file.
 
 For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, then restart it.
 

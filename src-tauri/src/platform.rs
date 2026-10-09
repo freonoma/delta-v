@@ -52,6 +52,7 @@ struct PopoverState {
     restore_pending: AtomicBool,
     dragging: AtomicBool,
     screen_change_pending: AtomicBool,
+    settings_suspended: AtomicBool,
     saved: Mutex<PanelRecord>,
     last_blur: Mutex<Option<Instant>>,
     preferred_size: Mutex<(f64, f64)>,
@@ -108,6 +109,7 @@ impl PopoverState {
             restore_pending: AtomicBool::new(state.preferences.pinned),
             dragging: AtomicBool::new(false),
             screen_change_pending: AtomicBool::new(false),
+            settings_suspended: AtomicBool::new(false),
             saved: Mutex::new(PanelRecord {
                 state,
                 error,
@@ -165,7 +167,13 @@ pub fn configure(app: &mut tauri::App) -> tauri::Result<()> {
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Focused(false)) {
-            if popover_pinned(&handle) || exports::dialog_open() {
+            if popover_pinned(&handle)
+                || exports::dialog_open()
+                || handle
+                    .state::<PopoverState>()
+                    .settings_suspended
+                    .load(Ordering::Relaxed)
+            {
                 return;
             }
             if let Err(error) = dismiss_popover(&handle, true) {
@@ -202,6 +210,16 @@ pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
             }
             return;
         }
+        if handle
+            .state::<PopoverState>()
+            .settings_suspended
+            .load(Ordering::Relaxed)
+        {
+            if let Err(error) = return_from_settings(&handle, false) {
+                eprintln!("Could not return to the usage panel: {error}");
+            }
+            return;
+        }
 
         // A tray click can resign the panel before its mouse-up event arrives.
         let just_blurred = handle
@@ -228,6 +246,47 @@ pub fn hide_popover(app: &AppHandle) -> tauri::Result<()> {
     dismiss_popover(app, false)
 }
 
+// These handoff operations run on the main thread, before Settings changes keyboard focus.
+pub fn suspend_for_settings(app: &AppHandle, from_panel: bool) -> tauri::Result<bool> {
+    let panel = app
+        .get_webview_panel(WINDOW)
+        .map_err(|_| tauri::Error::WindowNotFound)?;
+    let should_return = from_panel || panel.is_visible();
+    if should_return {
+        let state = app.state::<PopoverState>();
+        state.settings_suspended.store(true, Ordering::Relaxed);
+        state.restore_pending.store(false, Ordering::Relaxed);
+        if let Ok(mut last_blur) = state.last_blur.lock() {
+            *last_blur = None;
+        }
+        panel.hide();
+    }
+    Ok(should_return)
+}
+
+pub fn return_from_settings(app: &AppHandle, explicitly_requested: bool) -> tauri::Result<()> {
+    let state = app.state::<PopoverState>();
+    if !explicitly_requested && !state.settings_suspended.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let panel = app
+        .get_webview_panel(WINDOW)
+        .map_err(|_| tauri::Error::WindowNotFound)?;
+    position_popover(app, popover_pinned(app))?;
+    state.settings_suspended.store(false, Ordering::Relaxed);
+    if let Ok(mut last_blur) = state.last_blur.lock() {
+        *last_blur = None;
+    }
+    panel.show_and_make_key();
+    Ok(())
+}
+
+pub fn cancel_settings_return(app: &AppHandle) {
+    app.state::<PopoverState>()
+        .settings_suspended
+        .store(false, Ordering::Relaxed);
+}
+
 fn dismiss_popover(app: &AppHandle, on_blur: bool) -> tauri::Result<()> {
     if exports::dialog_open() {
         return Ok(());
@@ -243,13 +302,21 @@ fn dismiss_popover(app: &AppHandle, on_blur: bool) -> tauri::Result<()> {
         // Focus events can arrive after a native dialog has returned focus to the panel.
         // Check AppKit at dismissal time so an old blur cannot close it again.
         if on_blur {
-            if popover_pinned(&handle) || !panel.is_visible() || panel.as_panel().isKeyWindow() {
+            if popover_pinned(&handle)
+                || handle
+                    .state::<PopoverState>()
+                    .settings_suspended
+                    .load(Ordering::Relaxed)
+                || !panel.is_visible()
+                || panel.as_panel().isKeyWindow()
+            {
                 return;
             }
             if let Ok(mut last_blur) = handle.state::<PopoverState>().last_blur.lock() {
                 *last_blur = Some(Instant::now());
             }
         }
+        cancel_settings_return(&handle);
         handle
             .state::<PopoverState>()
             .restore_pending

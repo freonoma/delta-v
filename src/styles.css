@@ -19,7 +19,7 @@ button:disabled { cursor: default; opacity: .48; }
 button { -webkit-user-select: none; user-select: none; }
 h1, h2, p { margin: 0; }
 
-.popover-shell {
+:is(.popover-shell, .settings-window) {
   --surface: #f8f9fb;
   --card: #ffffff;
   --text: #222b38;
@@ -39,6 +39,11 @@ h1, h2, p { margin: 0; }
   --claude: #bc8367;
   --codex: #648b85;
   color-scheme: light;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.popover-shell {
   width: 340px;
   max-width: 100vw;
   max-height: min(620px, 100vh);
@@ -56,7 +61,7 @@ h1, h2, p { margin: 0; }
 .footer-left { display: flex; align-items: center; gap: 2px; }
 
 @media (prefers-color-scheme: dark) {
-  .popover-shell:not([data-theme="light"]) {
+  :is(.popover-shell, .settings-window):not([data-theme="light"]) {
     --surface: #1b2028;
     --card: #232a34;
     --text: #e9edf4;
@@ -79,7 +84,7 @@ h1, h2, p { margin: 0; }
   }
 }
 
-.popover-shell[data-theme="dark"] {
+:is(.popover-shell, .settings-window)[data-theme="dark"] {
   --surface: #1b2028;
   --card: #232a34;
   --text: #e9edf4;

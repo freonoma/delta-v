@@ -1,4 +1,4 @@
-export function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus" | "history"; spinning?: boolean }) {
+export function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus" | "history" | "back"; spinning?: boolean }) {
   return (
     <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
@@ -14,6 +14,7 @@ export function Icon({ name, spinning = false }: { name: "refresh" | "settings" 
       {name === "plus" && <path d="M10 4v12M4 10h12" />}
       {name === "minus" && <path d="M4 10h12" />}
       {name === "history" && <path d="M3 3v14h14M6 12l3-5 4 3 4-6" />}
+      {name === "back" && <path d="m8 4-6 6 6 6M2 10h16" />}
     </svg>
   );
 }

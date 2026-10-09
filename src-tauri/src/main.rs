@@ -9,6 +9,8 @@ mod providers;
 mod recording;
 mod runtime;
 mod settings;
+mod settings_appearance;
+mod settings_window;
 mod tray;
 mod updates;
 
@@ -17,6 +19,45 @@ use tauri::Manager;
 #[tauri::command]
 fn get_app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+#[tauri::command]
+async fn open_settings_window(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    section: Option<settings_window::SettingsSection>,
+) -> Result<(), String> {
+    settings_window::open(&app, section, window.label() == "main")
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn close_settings_window(
+    window: tauri::WebviewWindow,
+    show_panel: Option<bool>,
+) -> Result<(), String> {
+    settings_window::close(window, show_panel.unwrap_or(false))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn set_settings_appearance(
+    window: tauri::WebviewWindow,
+    theme: settings::Theme,
+) -> Result<(), String> {
+    settings_appearance::apply(window, theme).await
+}
+
+#[tauri::command]
+async fn set_settings_section(
+    window: tauri::WebviewWindow,
+    section: settings_window::SettingsSection,
+) -> Result<(), String> {
+    settings_window::set_section(window, section)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -265,16 +306,43 @@ fn drag_popover(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
-    runtime::request_quit(&app);
+fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    settings_window::request_quit(&app).map_err(|_| "Could not quit Delta-V. Try again.".to_owned())
+}
+
+#[tauri::command]
+fn take_settings_quit_request(window: tauri::WebviewWindow) -> Result<bool, String> {
+    settings_window::take_quit_request(&window).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_quit_app(window: tauri::WebviewWindow) -> Result<(), String> {
+    settings_window::confirm_quit(&window).map_err(|error| error.to_string())
 }
 
 fn main() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_nspanel::init())
+        .on_window_event(|window, event| {
+            if window.label() == "settings" && matches!(event, tauri::WindowEvent::Destroyed) {
+                settings_window::destroyed(window.app_handle());
+            }
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                if let Err(error) = platform::hide_popover(window.app_handle()) {
+                    eprintln!("Could not hide the usage panel: {error}");
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            open_settings_window,
+            close_settings_window,
+            set_settings_appearance,
+            set_settings_section,
             get_update_state,
             check_for_updates,
             get_state,
@@ -305,12 +373,15 @@ fn main() -> tauri::Result<()> {
             get_panel_preferences,
             save_panel_preferences,
             drag_popover,
-            quit_app
+            quit_app,
+            take_settings_quit_request,
+            confirm_quit_app
         ])
         .setup(|app| {
             platform::configure(app)?;
             app.manage(runtime::Runtime::new()?);
             app.manage(updates::UpdateChecker::default());
+            app.manage(settings_window::SettingsWindowState::default());
             tray::install(app)?;
             runtime::start(app.handle().clone());
             Ok(())

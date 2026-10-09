@@ -1,0 +1,333 @@
+.settings-window {
+  display: grid;
+  grid-template-columns: 152px minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-window[hidden],
+.settings-window [hidden] {
+  display: none !important;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 10px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--control);
+}
+
+.settings-brand {
+  margin: 0 8px;
+}
+
+.settings-sidebar-title {
+  margin: 8px 8px 12px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.settings-sidebar nav {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.settings-sidebar [role="tablist"] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-sidebar [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.settings-sidebar [role="tab"]:hover {
+  color: var(--text);
+  background: var(--selected);
+}
+
+.settings-sidebar [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  background: var(--selected);
+  box-shadow: var(--shadow);
+}
+
+.settings-sidebar .icon {
+  flex-shrink: 0;
+}
+
+.settings-back {
+  flex-shrink: 0;
+  justify-content: flex-start;
+  min-height: 32px;
+  margin-top: auto;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.settings-workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-section-header {
+  flex-shrink: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-section-header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.settings-section-header p {
+  margin-top: 4px;
+  color: var(--secondary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-section-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px 20px;
+  scroll-padding: 14px;
+  scrollbar-gutter: stable;
+}
+
+.settings-section-content > :not(dialog),
+.settings-section-header > * {
+  max-width: 620px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.settings-display-fields {
+  min-width: 0;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+}
+
+.settings-window :is(.visually-hidden, .sr-only) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.settings-window .setting-row small {
+  max-width: 310px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-window .setting-row select {
+  flex-shrink: 0;
+  width: 44%;
+  min-width: 120px;
+  max-width: 200px;
+}
+
+.settings-window :is(.setting-row select, .window-picker select) {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.settings-window .window-picker-grid.two-providers {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.settings-window .window-picker legend {
+  font-size: 11px;
+}
+
+.settings-window .window-picker label {
+  font-size: 10px;
+}
+
+.settings-window .number-field input {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.settings-window :is(.number-field, .startup-caption, .updates-checked) {
+  color: var(--secondary);
+}
+
+.settings-section-content :is(.accounts-settings, .history-settings, .startup-settings, .updates-settings):first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-window :is(.compact-settings > p, .window-picker > p, .accounts-settings > p, .history-introduction, .history-storage, .startup-setting-row p, .startup-caption, .updates-description, .updates-checked) {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-window :is(.startup-setting-row, .updates-version, .updates-result) {
+  font-size: 11px;
+}
+
+.settings-window .history-storage code {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-window .account-heading p {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-window :is(.account-actions, .history-actions, .startup-actions) {
+  flex-wrap: wrap;
+}
+
+/* Keep the shared 30px by 18px switch visual inside a 32px-high target. */
+.settings-window .startup-switch {
+  position: relative;
+  width: 44px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.settings-window .startup-switch::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border: 1px solid var(--muted);
+  border-radius: 10px;
+  background: var(--track);
+}
+
+.settings-window .startup-switch span {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+}
+
+.settings-window .startup-switch[aria-checked="true"]::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.settings-window :is(.settings-validation, .history-error, .startup-error, .updates-error, .setup-error, .error-notice, .recovery-notice, .sign-in-confirmation) {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-window :is(.text-button, .primary-button) {
+  min-height: 32px;
+  padding: 7px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settings-window .updates-link {
+  min-height: 32px;
+  padding: 7px 0;
+  font-size: 11px;
+}
+
+.settings-window .setup-link {
+  min-height: 32px;
+  padding: 7px 0;
+  font-size: 11px;
+}
+
+.settings-window .recovery-help {
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.settings-window-footer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 54px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.settings-save-status {
+  flex: 1;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.settings-save-status[role="alert"] {
+  color: var(--warning);
+}
+
+.settings-footer-actions,
+.settings-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-footer-actions {
+  flex-shrink: 0;
+}
+
+.settings-window .disconnect-dialog,
+.settings-window .settings-unsaved-dialog {
+  width: min(420px, calc(100vw - 40px));
+  padding: 18px;
+}
+
+.settings-dialog-actions {
+  margin-top: 16px;
+}
+
+.settings-window :is(button, input, select, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

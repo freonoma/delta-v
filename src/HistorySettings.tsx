@@ -199,7 +199,7 @@ export function HistorySettings({ settings, onChange }: {
         {(!state || failure) && <button className="text-button" disabled={busy} onClick={() => setRetry((value) => value + 1)}>Try again</button>}
         <button className="text-button" disabled={busy || !canClear} onClick={() => { setError(null); setConfirmation({ kind: "clear" }); }}>Clear history</button>
       </div>
-      <p className="startup-caption">Changes apply immediately. Save settings and Cancel do not undo them.</p>
+      <p className="startup-caption">Changes apply immediately.</p>
       {confirmation && <HistoryConfirmation action={confirmation} pending={pending} error={error}
         onConfirm={() => void act(confirmation)} onCancel={() => { if (!operation.current) { setConfirmation(null); setError(null); } }} />}
     </section>

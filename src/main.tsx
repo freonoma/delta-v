@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { SettingsWindow } from "./SettingsWindow";
 import "./styles.css";
+import "./SettingsWindow.css";
 
 const root = document.getElementById("root");
 
@@ -11,6 +13,6 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    {new URLSearchParams(window.location.search).get("view") === "settings" ? <SettingsWindow /> : <App />}
   </StrictMode>,
 );
