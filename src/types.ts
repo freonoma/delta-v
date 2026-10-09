@@ -91,6 +91,7 @@ export interface PanelPreferences {
 }
 
 export interface PanelPreferencesState {
+  revision: number;
   preferences: PanelPreferences;
   error: string | null;
 }
@@ -124,6 +125,10 @@ export interface LoginItemState {
   status: "disabled" | "enabled" | "approval_required" | "unavailable";
   reason: string | null;
 }
+
+export type DisplayPreferences = Pick<Settings,
+  "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "percentage_mode"
+  | "claude_windows" | "codex_windows">;
 
 export interface Amount {
   used: string | null;
@@ -164,6 +169,7 @@ export interface ProviderState {
 }
 
 export interface AppState {
+  revision: number;
   settings: Settings;
   providers: ProviderState[];
   settings_error: string | null;

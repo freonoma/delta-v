@@ -59,6 +59,53 @@ pub struct Settings {
     pub history_retention: Retention,
 }
 
+/// Fields owned by the display form. Other choices may change while it is open.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayPreferences {
+    pub tracked_limit: String,
+    pub threshold: u8,
+    pub refresh_seconds: u64,
+    pub theme: Theme,
+    pub percentage_mode: PercentageMode,
+    pub claude_windows: Vec<String>,
+    pub codex_windows: Vec<String>,
+}
+
+impl DisplayPreferences {
+    pub fn apply_to(self, current: &Settings) -> Result<Settings, SettingsError> {
+        let mut settings = Settings {
+            tracked_limit: self.tracked_limit,
+            threshold: self.threshold,
+            refresh_seconds: self.refresh_seconds,
+            theme: self.theme,
+            percentage_mode: self.percentage_mode,
+            claude_windows: self.claude_windows,
+            codex_windows: self.codex_windows,
+            ..current.clone()
+        };
+        // Validate before hiding an unavailable provider, so an invalid draft
+        // cannot become valid merely because its tracked limit is hidden.
+        settings.validate()?;
+        settings.normalize_tracked_limit();
+        Ok(settings)
+    }
+}
+
+impl From<&Settings> for DisplayPreferences {
+    fn from(settings: &Settings) -> Self {
+        Self {
+            tracked_limit: settings.tracked_limit.clone(),
+            threshold: settings.threshold,
+            refresh_seconds: settings.refresh_seconds,
+            theme: settings.theme,
+            percentage_mode: settings.percentage_mode,
+            claude_windows: settings.claude_windows.clone(),
+            codex_windows: settings.codex_windows.clone(),
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -102,6 +149,30 @@ pub enum SettingsError {
 }
 
 impl Settings {
+    pub fn with_provider_selection(
+        &self,
+        providers: ProviderSelection,
+    ) -> Result<Self, SettingsError> {
+        let mut settings = Self {
+            providers,
+            ..self.clone()
+        };
+        settings.validate()?;
+        settings.normalize_tracked_limit();
+        Ok(settings)
+    }
+
+    fn normalize_tracked_limit(&mut self) {
+        let visible = match self.providers {
+            ProviderSelection::Both => true,
+            ProviderSelection::Claude => self.tracked_limit.starts_with("claude:"),
+            ProviderSelection::Codex => self.tracked_limit.starts_with("codex:"),
+        };
+        if self.tracked_limit != "auto" && !visible {
+            self.tracked_limit = "auto".into();
+        }
+    }
+
     pub fn is_enabled(&self, provider: ProviderId) -> bool {
         match provider {
             ProviderId::Claude => self.claude_enabled,
@@ -182,6 +253,79 @@ pub fn save(settings: &Settings) -> Result<(), SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_payload_cannot_include_other_settings_or_omit_form_fields() {
+        let payload = serde_json::to_value(DisplayPreferences::from(&Settings::default())).unwrap();
+        for field in [
+            "providers",
+            "claude_enabled",
+            "codex_enabled",
+            "launch_at_login_prompt_dismissed",
+            "history_recording",
+            "history_retention",
+        ] {
+            let mut expanded = payload.clone();
+            expanded[field] = serde_json::json!(true);
+            assert!(serde_json::from_value::<DisplayPreferences>(expanded).is_err());
+        }
+        let mut incomplete = payload;
+        incomplete.as_object_mut().unwrap().remove("theme");
+        assert!(serde_json::from_value::<DisplayPreferences>(incomplete).is_err());
+    }
+
+    #[test]
+    fn both_narrow_changes_normalize_tracking_for_the_current_selection() {
+        for (providers, tracked, expected) in [
+            (ProviderSelection::Both, "claude:session", "claude:session"),
+            (ProviderSelection::Both, "codex:weekly", "codex:weekly"),
+            (
+                ProviderSelection::Claude,
+                "claude:session",
+                "claude:session",
+            ),
+            (ProviderSelection::Claude, "codex:weekly", "auto"),
+            (ProviderSelection::Codex, "claude:session", "auto"),
+            (ProviderSelection::Codex, "codex:weekly", "codex:weekly"),
+            (ProviderSelection::Claude, "auto", "auto"),
+            (ProviderSelection::Codex, "auto", "auto"),
+        ] {
+            let original = Settings {
+                tracked_limit: tracked.into(),
+                ..Settings::default()
+            };
+            let selected = original.with_provider_selection(providers).unwrap();
+            assert_eq!(selected.tracked_limit, expected);
+            let current = Settings {
+                providers,
+                ..Settings::default()
+            };
+            let saved = DisplayPreferences::from(&original)
+                .apply_to(&current)
+                .unwrap();
+            assert_eq!(saved.providers, providers);
+            assert_eq!(saved.tracked_limit, expected);
+        }
+    }
+
+    #[test]
+    fn hidden_tracking_does_not_bypass_display_validation() {
+        let current = Settings {
+            providers: ProviderSelection::Claude,
+            ..Settings::default()
+        };
+        for tracked in [
+            "unknown:window".to_owned(),
+            format!("codex:{}", "x".repeat(257)),
+        ] {
+            let mut preferences = DisplayPreferences::from(&current);
+            preferences.tracked_limit = tracked;
+            assert!(matches!(
+                preferences.apply_to(&current),
+                Err(SettingsError::TrackedLimit)
+            ));
+        }
+    }
 
     #[test]
     fn rejects_unbounded_polling_and_invalid_thresholds() {

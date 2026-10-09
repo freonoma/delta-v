@@ -29,6 +29,44 @@ pub struct PanelPreferences {
     pub layout: MiniLayout,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PanelPreferencesPatch {
+    pub pinned: Option<bool>,
+    pub mini: Option<bool>,
+    pub expanded: Option<bool>,
+    pub layout: Option<MiniLayout>,
+}
+
+impl PanelPreferencesPatch {
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+
+    pub fn apply(self, mut current: PanelPreferences) -> PanelPreferences {
+        if self.is_empty() {
+            return current;
+        }
+        if let Some(pinned) = self.pinned {
+            current.pinned = pinned;
+        }
+        if let Some(mini) = self.mini {
+            current.mini = mini;
+        }
+        if let Some(expanded) = self.expanded {
+            current.expanded = expanded;
+        }
+        if let Some(layout) = self.layout {
+            current.layout = layout;
+        }
+        if !current.pinned {
+            current.mini = false;
+            current.expanded = false;
+        }
+        current
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelPosition {
@@ -191,6 +229,112 @@ mod tests {
                 top: 44.25,
             }),
         }
+    }
+
+    #[test]
+    fn independent_pin_and_layout_patches_preserve_both_changes_in_either_order() {
+        let pin = PanelPreferencesPatch {
+            pinned: Some(true),
+            ..Default::default()
+        };
+        let layout = PanelPreferencesPatch {
+            layout: Some(MiniLayout::Stacked),
+            ..Default::default()
+        };
+        let initial = PanelPreferences::default();
+        let expected = PanelPreferences {
+            pinned: true,
+            layout: MiniLayout::Stacked,
+            ..initial
+        };
+        assert_eq!(layout.apply(pin.apply(initial)), expected);
+        assert_eq!(pin.apply(layout.apply(initial)), expected);
+    }
+
+    #[test]
+    fn a_layout_patch_prepared_before_unpinning_cannot_restore_mini_view() {
+        let initial = pinned_state().preferences;
+        let layout = PanelPreferencesPatch {
+            layout: Some(MiniLayout::Columns),
+            ..Default::default()
+        };
+        let unpin = PanelPreferencesPatch {
+            pinned: Some(false),
+            ..Default::default()
+        };
+        let expected = PanelPreferences::default();
+        assert_eq!(layout.apply(unpin.apply(initial)), expected);
+        assert_eq!(unpin.apply(layout.apply(initial)), expected);
+    }
+
+    #[test]
+    fn mini_patches_preserve_layout_and_cannot_enable_mini_while_unpinned() {
+        let mini = PanelPreferencesPatch {
+            mini: Some(true),
+            expanded: Some(true),
+            ..Default::default()
+        };
+        let layout = PanelPreferencesPatch {
+            layout: Some(MiniLayout::Stacked),
+            ..Default::default()
+        };
+        let initial = PanelPreferences {
+            pinned: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            layout.apply(mini.apply(initial)),
+            pinned_state().preferences
+        );
+        assert_eq!(
+            mini.apply(layout.apply(initial)),
+            pinned_state().preferences
+        );
+        let unpinned = PanelPreferences {
+            pinned: false,
+            mini: false,
+            expanded: false,
+            layout: MiniLayout::Stacked,
+        };
+        assert_eq!(mini.apply(unpinned), unpinned);
+    }
+
+    #[test]
+    fn empty_and_null_patches_are_noops_and_malformed_fields_are_rejected() {
+        for value in ["{}", r#"{"layout":null,"pinned":null}"#] {
+            let patch: PanelPreferencesPatch = serde_json::from_str(value).unwrap();
+            assert!(patch.is_empty());
+            assert_eq!(
+                patch.apply(pinned_state().preferences),
+                pinned_state().preferences
+            );
+        }
+        for value in [
+            r#"{"pined":true}"#,
+            r#"{"pinned":"true"}"#,
+            r#"{"expanded":1}"#,
+            r#"{"layout":"grid"}"#,
+            r#"{"position":{"x":0,"top":0,"display_id":1}}"#,
+        ] {
+            assert!(serde_json::from_str::<PanelPreferencesPatch>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn patched_preferences_keep_the_existing_saved_file_format_and_position() {
+        let mut state = pinned_state();
+        let position = state.position;
+        state.preferences = PanelPreferencesPatch {
+            layout: Some(MiniLayout::Columns),
+            ..Default::default()
+        }
+        .apply(state.preferences);
+        let serialized = toml::to_string_pretty(&state).unwrap();
+        assert_eq!(decode(serialized.as_bytes()).unwrap(), state);
+        assert_eq!(state.position, position);
+        assert!(serialized.contains("layout = \"columns\""));
+        assert!(!serialized.contains("revision"));
+        assert!(!serialized.contains("patch"));
     }
 
     #[test]

@@ -30,7 +30,7 @@ use tauri_plugin_positioner::{Position, WindowExt};
 
 use crate::{
     model::ProviderId,
-    panel_state::{self, PanelPosition, PanelPreferences, PanelState},
+    panel_state::{self, PanelPosition, PanelPreferences, PanelPreferencesPatch, PanelState},
 };
 
 const WINDOW: &str = "main";
@@ -60,12 +60,41 @@ struct PopoverState {
 struct PanelRecord {
     state: PanelState,
     error: Option<String>,
+    revision: u64,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PanelPreferencesView {
     preferences: PanelPreferences,
     error: Option<String>,
+    revision: u64,
+}
+
+impl PanelRecord {
+    fn view(&self) -> PanelPreferencesView {
+        PanelPreferencesView {
+            preferences: self.state.preferences,
+            error: self.error.clone(),
+            revision: self.revision,
+        }
+    }
+
+    fn replace_state(&mut self, state: PanelState) {
+        if self.state.preferences != state.preferences || self.error.is_some() {
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.state = state;
+        self.error = None;
+    }
+
+    fn set_error(&mut self, error: Option<String>) -> bool {
+        if self.error == error {
+            return false;
+        }
+        self.error = error;
+        self.revision = self.revision.saturating_add(1);
+        true
+    }
 }
 
 impl PopoverState {
@@ -79,7 +108,11 @@ impl PopoverState {
             restore_pending: AtomicBool::new(state.preferences.pinned),
             dragging: AtomicBool::new(false),
             screen_change_pending: AtomicBool::new(false),
-            saved: Mutex::new(PanelRecord { state, error }),
+            saved: Mutex::new(PanelRecord {
+                state,
+                error,
+                revision: 0,
+            }),
             last_blur: Mutex::new(None),
             preferred_size: Mutex::new((560.0, 360.0)),
         }
@@ -238,36 +271,39 @@ pub fn panel_preferences(app: &AppHandle) -> Result<PanelPreferencesView, String
         .saved
         .lock()
         .map_err(|_| "Could not read panel preferences.")?;
-    Ok(PanelPreferencesView {
-        preferences: saved.state.preferences,
-        error: saved.error.clone(),
-    })
+    Ok(saved.view())
 }
 
 pub async fn save_panel_preferences(
     app: &AppHandle,
-    mut preferences: PanelPreferences,
-) -> Result<PanelPreferences, String> {
-    if !preferences.pinned {
-        preferences.mini = false;
-        preferences.expanded = false;
-    }
+    patch: PanelPreferencesPatch,
+) -> Result<PanelPreferencesView, String> {
     let handle = app.clone();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let result = (|| {
+            let state = handle.state::<PopoverState>();
+            // Main-thread serialization keeps other windows' earlier patches in this merge.
+            let mut candidate = {
+                let saved = state
+                    .saved
+                    .lock()
+                    .map_err(|_| "Could not save panel preferences.")?;
+                let preferences = patch.apply(saved.state.preferences);
+                if patch.is_empty()
+                    || (preferences == saved.state.preferences && saved.error.is_none())
+                {
+                    return Ok(saved.view());
+                }
+                let mut candidate = saved.state.clone();
+                candidate.preferences = preferences;
+                candidate
+            };
+            let preferences = candidate.preferences;
             let panel = handle
                 .get_webview_panel(WINDOW)
                 .map_err(|_| "Could not find the usage panel.")?;
-            let state = handle.state::<PopoverState>();
             let was_pinned = popover_pinned(&handle);
-            let mut candidate = state
-                .saved
-                .lock()
-                .map_err(|_| "Could not save panel preferences.")?
-                .state
-                .clone();
-            candidate.preferences = preferences;
             if preferences.pinned && !was_pinned {
                 candidate.position = current_panel_position(&handle);
             }
@@ -281,14 +317,14 @@ pub async fn save_panel_preferences(
                 }
                 return Err(error.to_string());
             }
-            {
+            let view = {
                 let mut saved = state
                     .saved
                     .lock()
                     .map_err(|_| "Could not save panel preferences.")?;
-                saved.state = candidate;
-                saved.error = None;
-            }
+                saved.replace_state(candidate);
+                saved.view()
+            };
             panel.set_level(if preferences.pinned {
                 tauri_nspanel::PanelLevel::Floating.value()
             } else {
@@ -299,7 +335,8 @@ pub async fn save_panel_preferences(
             if let Ok(mut last_blur) = state.last_blur.lock() {
                 *last_blur = None;
             }
-            Ok(preferences)
+            publish_panel_preferences(&handle, &view);
+            Ok(view)
         })();
         let _ = sender.send(result);
     })
@@ -307,6 +344,12 @@ pub async fn save_panel_preferences(
     receiver
         .await
         .map_err(|_| "Could not save panel preferences.".to_owned())?
+}
+
+fn publish_panel_preferences(app: &AppHandle, view: &PanelPreferencesView) {
+    if let Err(error) = app.emit("panel-preferences-updated", view) {
+        eprintln!("Could not update panel preferences: {error}");
+    }
 }
 
 pub fn drag_popover(app: &AppHandle) -> tauri::Result<()> {
@@ -394,8 +437,14 @@ pub fn resize_popover(app: &AppHandle, width: f64, height: f64, ready: bool) -> 
 }
 
 fn report_panel_error(app: &AppHandle, error: String) {
-    if let Ok(mut saved) = app.state::<PopoverState>().saved.lock() {
-        saved.error = Some(error.clone());
+    let view = app
+        .state::<PopoverState>()
+        .saved
+        .lock()
+        .ok()
+        .and_then(|mut saved| saved.set_error(Some(error.clone())).then(|| saved.view()));
+    if let Some(view) = view {
+        publish_panel_preferences(app, &view);
     }
     eprintln!("{error}");
     let _ = app.emit("panel-state-error", error);
@@ -443,7 +492,11 @@ fn remember_panel_position(app: &AppHandle) -> Result<(), String> {
     candidate.position = Some(position);
     saved.state = candidate;
     panel_state::save(&saved.state).map_err(|error| error.to_string())?;
-    saved.error = None;
+    let view = saved.set_error(None).then(|| saved.view());
+    drop(saved);
+    if let Some(view) = view {
+        publish_panel_preferences(app, &view);
+    }
     Ok(())
 }
 
@@ -821,6 +874,48 @@ fn session_flag(session: *const c_void, name: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preference_views_order_commits_and_error_changes_without_persisting_revisions() {
+        let mut saved = PanelRecord {
+            state: PanelState::default(),
+            error: None,
+            revision: 0,
+        };
+        let initial = saved.view();
+        let mut state = saved.state.clone();
+        state.preferences = PanelPreferencesPatch {
+            pinned: Some(true),
+            ..Default::default()
+        }
+        .apply(state.preferences);
+        saved.replace_state(state);
+        let pinned = saved.view();
+        assert!(pinned.revision > initial.revision);
+        assert!(!initial.preferences.pinned);
+        assert!(pinned.preferences.pinned);
+
+        assert!(saved.set_error(Some("Could not save the panel position.".into())));
+        let failed = saved.view();
+        assert!(failed.revision > pinned.revision);
+        assert!(!saved.set_error(failed.error.clone()));
+        assert_eq!(saved.view(), failed);
+
+        let state = saved.state.clone();
+        saved.replace_state(state);
+        let recovered = saved.view();
+        assert!(recovered.revision > failed.revision);
+        assert!(recovered.error.is_none());
+        let mut state = saved.state.clone();
+        state.position = Some(PanelPosition {
+            display_id: 17,
+            x: 12.0,
+            top: 34.0,
+        });
+        saved.replace_state(state);
+        assert_eq!(saved.view(), recovered);
+        assert!(!toml::to_string(&saved.state).unwrap().contains("revision"));
+    }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
         NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))

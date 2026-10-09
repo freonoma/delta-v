@@ -207,11 +207,25 @@ async fn open_login_item_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_settings(
+fn save_display_preferences(
     app: tauri::AppHandle,
-    settings: settings::Settings,
+    preferences: settings::DisplayPreferences,
 ) -> Result<runtime::AppState, String> {
-    let view = app.state::<runtime::Runtime>().save(settings)?;
+    let view = app
+        .state::<runtime::Runtime>()
+        .save_display_preferences(preferences)?;
+    runtime::publish(&app);
+    Ok(view)
+}
+
+#[tauri::command]
+fn set_provider_selection(
+    app: tauri::AppHandle,
+    providers: settings::ProviderSelection,
+) -> Result<runtime::AppState, String> {
+    let view = app
+        .state::<runtime::Runtime>()
+        .set_provider_selection(providers)?;
     runtime::publish(&app);
     Ok(view)
 }
@@ -240,9 +254,9 @@ fn get_panel_preferences(app: tauri::AppHandle) -> Result<platform::PanelPrefere
 #[tauri::command]
 async fn save_panel_preferences(
     app: tauri::AppHandle,
-    preferences: panel_state::PanelPreferences,
-) -> Result<panel_state::PanelPreferences, String> {
-    platform::save_panel_preferences(&app, preferences).await
+    patch: panel_state::PanelPreferencesPatch,
+) -> Result<platform::PanelPreferencesView, String> {
+    platform::save_panel_preferences(&app, patch).await
 }
 
 #[tauri::command]
@@ -284,7 +298,8 @@ fn main() -> tauri::Result<()> {
             set_launch_at_login,
             dismiss_launch_at_login_prompt,
             open_login_item_settings,
-            save_settings,
+            save_display_preferences,
+            set_provider_selection,
             hide_popover,
             resize_popover,
             get_panel_preferences,

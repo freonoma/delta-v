@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppState, Amount, HistoryState, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
+import type { AppState, Amount, DisplayPreferences, HistoryState, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
 import { createPreview } from "./preview";
+import { displayPreferences, latestSnapshot, previewDisplayPreferences, previewPanelPreferences, previewProviderSelection, visibleTrackedLimit } from "./preference-state";
 import { Startup, useLoginItem } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistorySettings } from "./HistorySettings";
@@ -122,11 +123,6 @@ function DisconnectConfirmation({ provider, onConfirm, onCancel }: {
       </div>
     </dialog>
   );
-}
-
-function visibleTrackedLimit(tracked: string, providers: ProviderSelection): string {
-  return providers === "both" || tracked === "auto" || tracked.startsWith(`${providers}:`)
-    ? tracked : "auto";
 }
 
 function amountText(value: string, currency: string | null): string {
@@ -491,7 +487,7 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
   miniLayout: MiniLayout;
   onMiniLayoutChange: (layout: MiniLayout) => Promise<void>;
   onHistoryChange: (history: HistoryState) => void;
-  onSave: (settings: Settings) => Promise<void>;
+  onSave: (preferences: DisplayPreferences) => Promise<void>;
   onClose: () => void;
   onThemePreview: (theme: Theme | null) => void;
   onSetEnabled: (provider: ProviderId, enabled: boolean) => void;
@@ -537,10 +533,8 @@ function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection,
     setSubmitting(true);
     try {
       await onSave({
-        ...draft, providers: state.settings.providers, claude_enabled: state.settings.claude_enabled,
-        codex_enabled: state.settings.codex_enabled, tracked_limit: tracked, threshold: parsedThreshold,
-        refresh_seconds: parsedInterval, history_recording: state.settings.history_recording,
-        history_retention: state.settings.history_retention,
+        ...displayPreferences(draft), tracked_limit: tracked, threshold: parsedThreshold,
+        refresh_seconds: parsedInterval,
       });
       await onMiniLayoutChange(layoutDraft);
       onClose();
@@ -657,6 +651,8 @@ export default function App() {
   const [expanded, setExpanded] = useState(false);
   const [panelPreferences, setPanelPreferences] = useState<PanelPreferences | null>(preview ? defaultPanelPreferences : null);
   const panelPreferencesRef = useRef(panelPreferences);
+  const panelSnapshotRef = useRef<PanelPreferencesState | null>(preview
+    ? { revision: 0, preferences: defaultPanelPreferences, error: null } : null);
   const panelCommandPending = useRef(false);
   const panelReadGeneration = useRef(0);
   const [showDragHint, setShowDragHint] = useState(false);
@@ -679,7 +675,22 @@ export default function App() {
   const panelReady = state !== null && panelPreferences !== null;
   const panelBusy = !panelReady || panelPending;
   const miniActive = mini && pinned && !settingsOpen && !historyOpen;
+  const applyAppState = useCallback((next: AppState) => {
+    setState((current) => latestSnapshot(current, next));
+  }, []);
+  const applyPanelState = useCallback((next: PanelPreferencesState) => {
+    const accepted = latestSnapshot(panelSnapshotRef.current, next);
+    if (accepted !== next) return accepted.preferences;
+    const previousError = panelSnapshotRef.current?.error;
+    panelSnapshotRef.current = next;
+    panelPreferencesRef.current = next.preferences;
+    setPanelPreferences(next.preferences);
+    setError((current) => next.error ?? (current === previousError ? null : current));
+    return next.preferences;
+  }, []);
   const dismissStartupPrompt = useCallback(() => {
+    // Native preference changes arrive in revisioned usage-updated snapshots.
+    if (!preview) return;
     setState((current) => current ? {
       ...current, settings: { ...current.settings, launch_at_login_prompt_dismissed: true },
     } : current);
@@ -687,6 +698,7 @@ export default function App() {
   const login = useLoginItem(dismissStartupPrompt);
   const updates = useUpdates();
   const updateHistoryPreferences = useCallback((history: HistoryState) => {
+    if (!preview) return;
     setState((current) => {
       if (!current || (current.settings.history_recording === history.recording && current.settings.history_retention === history.retention)) return current;
       return { ...current, settings: { ...current.settings, history_recording: history.recording, history_retention: history.retention } };
@@ -705,30 +717,22 @@ export default function App() {
   useEffect(() => {
     if (!native) return;
     let disposed = false;
-    let receivedEvent = false;
     let unlisten: (() => void) | undefined;
     let unlistenOpen: (() => void) | undefined;
     let unlistenMove: (() => void) | undefined;
-    let unlistenPanelError: (() => void) | undefined;
+    let unlistenPanel: (() => void) | undefined;
     void getCurrentWindow().onMoved(() => {
       if (!disposed) setShowDragHint(false);
     }).then((stop) => { if (disposed) stop(); else unlistenMove = stop; })
       .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    void listen<string>("panel-state-error", (event) => {
-      if (!disposed) setError(event.payload);
-    }).then((stop) => { if (disposed) stop(); else unlistenPanelError = stop; })
-      .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    const panelRead = ++panelReadGeneration.current;
-    void invoke<PanelPreferencesState>("get_panel_preferences")
-      .then((saved) => {
-        if (disposed || panelRead !== panelReadGeneration.current) return;
-        panelPreferencesRef.current = saved.preferences;
-        setPanelPreferences(saved.preferences);
-        if (saved.error) setError(saved.error);
-      })
-      .catch((caught: unknown) => {
-        if (!disposed && panelRead === panelReadGeneration.current) setError(errorMessage(caught));
-      });
+    void listen<PanelPreferencesState>("panel-preferences-updated", (event) => {
+      if (!disposed) applyPanelState(event.payload);
+    }).then(async (stop) => {
+      if (disposed) { stop(); return; }
+      unlistenPanel = stop;
+      const saved = await invoke<PanelPreferencesState>("get_panel_preferences");
+      if (!disposed) applyPanelState(saved);
+    }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
@@ -741,16 +745,15 @@ export default function App() {
       }
     }).then((stop) => { if (disposed) stop(); else unlistenOpen = stop; }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     void listen<AppState>("usage-updated", (event) => {
-      receivedEvent = true;
-      if (!disposed) setState(event.payload);
+      if (!disposed) applyAppState(event.payload);
     }).then(async (stop) => {
       if (disposed) { stop(); return; }
       unlisten = stop;
       const initial = await invoke<AppState>("get_state");
-      if (!disposed && !receivedEvent) setState(initial);
+      if (!disposed) applyAppState(initial);
     }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); unlistenPanelError?.(); window.cancelAnimationFrame(focusFrame.current); };
-  }, []);
+    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); unlistenPanel?.(); window.cancelAnimationFrame(focusFrame.current); };
+  }, [applyAppState, applyPanelState]);
 
   useEffect(() => {
     const element = shell.current;
@@ -814,22 +817,20 @@ export default function App() {
     const current = panelPreferencesRef.current;
     if (!current) throw new Error("Panel preferences are still loading. Try again in a moment.");
     if (panelCommandPending.current) throw new Error("Wait for the panel change to finish, then try again.");
-    const preferences = { ...current, ...changes };
-    if (current.pinned === preferences.pinned && current.mini === preferences.mini
-      && current.expanded === preferences.expanded && current.layout === preferences.layout) return current;
     panelCommandPending.current = true;
     setPanelPending(true);
+    setError(null);
     try {
-      const saved = preview ? preferences : await invoke<PanelPreferences>("save_panel_preferences", { preferences });
-      panelPreferencesRef.current = saved;
-      setPanelPreferences(saved);
-      setError(null);
-      return saved;
+      const saved = preview ? {
+        revision: (panelSnapshotRef.current?.revision ?? 0) + 1,
+        preferences: previewPanelPreferences(current, changes), error: null,
+      } : await invoke<PanelPreferencesState>("save_panel_preferences", { patch: changes });
+      return applyPanelState(saved);
     } finally {
       panelCommandPending.current = false;
       setPanelPending(false);
     }
-  }, []);
+  }, [applyPanelState]);
 
   const changePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
     if (panelCommandPending.current || !panelPreferencesRef.current) return false;
@@ -867,39 +868,36 @@ export default function App() {
     }
   }
 
-  const saveSettings = useCallback(async (settings: Settings) => {
+  const saveSettings = useCallback(async (preferences: DisplayPreferences) => {
     setSaving(true);
     try {
       if (preview) setState((current) => current ? {
-        ...current, settings: { ...settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
-          launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed,
-          history_recording: current.settings.history_recording, history_retention: current.settings.history_retention },
+        ...current, revision: current.revision + 1,
+        settings: previewDisplayPreferences(current.settings, preferences),
       } : current);
       else {
-        const saved = await invoke<AppState>("save_settings", { settings });
-        setState((current) => current ? {
-          ...current, settings: { ...saved.settings, claude_enabled: current.settings.claude_enabled, codex_enabled: current.settings.codex_enabled,
-            launch_at_login_prompt_dismissed: current.settings.launch_at_login_prompt_dismissed,
-            history_recording: current.settings.history_recording, history_retention: current.settings.history_retention },
-          settings_error: saved.settings_error,
-        } : saved);
+        const saved = await invoke<AppState>("save_display_preferences", { preferences });
+        applyAppState(saved);
       }
       setError(null);
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [applyAppState]);
 
   async function selectProviders(providers: ProviderSelection) {
-    if (!state || providers === state.settings.providers || saving || panelBusy) return;
+    if (!state || saving || panelBusy) return;
+    setSaving(true);
     try {
-      await saveSettings({
-        ...state.settings,
-        providers,
-        tracked_limit: visibleTrackedLimit(state.settings.tracked_limit, providers),
-      });
+      if (preview) setState((current) => current ? {
+        ...current, revision: current.revision + 1,
+        settings: previewProviderSelection(current.settings, providers),
+      } : current);
+      else applyAppState(await invoke<AppState>("set_provider_selection", { providers }));
+      setError(null);
     }
     catch (caught: unknown) { setError(errorMessage(caught)); }
+    finally { setSaving(false); }
   }
 
   async function refresh() {
@@ -1036,15 +1034,14 @@ export default function App() {
 
   async function retryInitialRead() {
     const panelRead = ++panelReadGeneration.current;
+    setError(null);
     try {
       const [initial, saved] = await Promise.all([
         invoke<AppState>("get_state"), invoke<PanelPreferencesState>("get_panel_preferences"),
       ]);
       if (panelRead !== panelReadGeneration.current) return;
-      setState(initial);
-      panelPreferencesRef.current = saved.preferences;
-      setPanelPreferences(saved.preferences);
-      setError(saved.error);
+      applyAppState(initial);
+      applyPanelState(saved);
     } catch (caught: unknown) {
       if (panelRead === panelReadGeneration.current) setError(errorMessage(caught));
     }

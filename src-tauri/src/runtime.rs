@@ -17,7 +17,9 @@ use crate::{
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
     recording::{HistoryState, Recorder},
-    settings::{self, PercentageMode, Settings},
+    settings::{
+        self, DisplayPreferences, PercentageMode, ProviderSelection, Settings, SettingsError,
+    },
     tray,
 };
 
@@ -45,6 +47,8 @@ pub struct ProviderState {
 
 #[derive(Clone, PartialEq, Serialize)]
 pub struct AppState {
+    /// Orders snapshots, including command replies and events, within this app run.
+    pub revision: u64,
     pub settings: Settings,
     pub providers: Vec<ProviderState>,
     pub settings_error: Option<String>,
@@ -69,6 +73,13 @@ struct Schedule {
 struct Inner {
     view: AppState,
     schedules: [Schedule; 2],
+}
+
+impl Inner {
+    fn snapshot(&mut self) -> AppState {
+        self.view.revision = self.view.revision.saturating_add(1);
+        self.view.clone()
+    }
 }
 
 pub struct Runtime {
@@ -103,6 +114,7 @@ impl Runtime {
             identity: providers::IdentityCache::default(),
             inner: Mutex::new(Inner {
                 view: AppState {
+                    revision: 0,
                     settings,
                     providers: PROVIDERS
                         .into_iter()
@@ -130,43 +142,54 @@ impl Runtime {
     pub fn state(&self) -> Result<AppState, String> {
         self.inner
             .lock()
-            .map(|inner| inner.view.clone())
+            .map(|mut inner| inner.snapshot())
             .map_err(|_| "Could not read the app state.".to_owned())
     }
 
-    pub fn save(&self, settings: Settings) -> Result<AppState, String> {
+    pub fn save_display_preferences(
+        &self,
+        preferences: DisplayPreferences,
+    ) -> Result<AppState, String> {
+        self.save_change(|current| preferences.apply_to(current))
+    }
+
+    pub fn set_provider_selection(&self, providers: ProviderSelection) -> Result<AppState, String> {
+        self.save_change(|current| current.with_provider_selection(providers))
+    }
+
+    fn save_change(
+        &self,
+        change: impl FnOnce(&Settings) -> Result<Settings, SettingsError>,
+    ) -> Result<AppState, String> {
         let mut inner = self.inner.lock().map_err(|_| "Could not save settings.")?;
-        let settings = merge_settings_draft(settings, &inner.view.settings);
-        settings::save(&settings).map_err(|error| error.to_string())?;
-        for (index, provider) in PROVIDERS.into_iter().enumerate() {
-            if inner.view.settings.providers.includes(provider)
-                != settings.providers.includes(provider)
-            {
-                let schedule = &mut inner.schedules[index];
-                schedule.next_due = 0;
-            } else if settings.refresh_seconds != inner.view.settings.refresh_seconds {
-                inner.schedules[index].next_due = inner.schedules[index]
-                    .next_due
-                    .min(providers::now() + settings.refresh_seconds as i64);
-            }
-        }
-        inner.view.settings = settings;
-        inner.view.settings_error = None;
-        let view = inner.view.clone();
+        let view = save_settings_change(&mut inner, change, providers::now(), settings::save)?;
         drop(inner);
         self.wake.notify_one();
         Ok(view)
     }
 }
 
-fn merge_settings_draft(mut draft: Settings, current: &Settings) -> Settings {
-    // Immediate actions must survive saving an older settings draft.
-    draft.claude_enabled = current.claude_enabled;
-    draft.codex_enabled = current.codex_enabled;
-    draft.launch_at_login_prompt_dismissed = current.launch_at_login_prompt_dismissed;
-    draft.history_recording = current.history_recording;
-    draft.history_retention = current.history_retention;
-    draft
+fn save_settings_change(
+    inner: &mut Inner,
+    change: impl FnOnce(&Settings) -> Result<Settings, SettingsError>,
+    now: i64,
+    persist: impl FnOnce(&Settings) -> Result<(), SettingsError>,
+) -> Result<AppState, String> {
+    let settings = change(&inner.view.settings).map_err(|error| error.to_string())?;
+    persist(&settings).map_err(|error| error.to_string())?;
+    for (index, provider) in PROVIDERS.into_iter().enumerate() {
+        if inner.view.settings.providers.includes(provider) != settings.providers.includes(provider)
+        {
+            inner.schedules[index].next_due = 0;
+        } else if settings.refresh_seconds != inner.view.settings.refresh_seconds {
+            inner.schedules[index].next_due = inner.schedules[index]
+                .next_due
+                .min(now.saturating_add(settings.refresh_seconds as i64));
+        }
+    }
+    inner.view.settings = settings;
+    inner.view.settings_error = None;
+    Ok(inner.snapshot())
 }
 
 pub fn history_state(app: &AppHandle) -> Result<HistoryState, String> {
@@ -1276,45 +1299,198 @@ mod tests {
     }
 
     #[test]
-    fn saving_an_open_draft_preserves_immediate_choices() {
-        let draft = Settings {
-            threshold: 15,
-            refresh_seconds: 120,
-            ..Settings::default()
-        };
-        let current = Settings {
-            claude_enabled: false,
-            codex_enabled: false,
-            launch_at_login_prompt_dismissed: true,
-            history_recording: true,
-            history_retention: Retention::Days90,
-            ..Settings::default()
-        };
+    fn interleaved_display_and_provider_changes_preserve_each_others_fields() {
+        for display_first in [true, false] {
+            let mut state = inner();
+            let draft = DisplayPreferences {
+                tracked_limit: "codex:weekly".into(),
+                threshold: 15,
+                refresh_seconds: 120,
+                theme: settings::Theme::Dark,
+                percentage_mode: PercentageMode::Used,
+                claude_windows: vec!["session".into(), "weekly".into()],
+                codex_windows: vec!["weekly".into()],
+            };
+            // These immediate actions occurred after the form was opened.
+            state.view.settings.claude_enabled = false;
+            state.view.settings.codex_enabled = false;
+            state.view.settings.launch_at_login_prompt_dismissed = true;
+            state.view.settings.history_recording = true;
+            state.view.settings.history_retention = Retention::Days90;
+            let display = |state: &mut Inner| {
+                save_settings_change(
+                    state,
+                    |current| draft.clone().apply_to(current),
+                    100,
+                    |_| Ok(()),
+                )
+                .unwrap()
+            };
+            let selection = |state: &mut Inner| {
+                save_settings_change(
+                    state,
+                    |current| current.with_provider_selection(ProviderSelection::Claude),
+                    100,
+                    |_| Ok(()),
+                )
+                .unwrap()
+            };
+            let (first, last) = if display_first {
+                (display(&mut state), selection(&mut state))
+            } else {
+                (selection(&mut state), display(&mut state))
+            };
+            assert!(last.revision > first.revision);
+            let saved = last.settings;
+            assert_eq!(saved.providers, ProviderSelection::Claude);
+            assert_eq!(saved.tracked_limit, "auto");
+            assert_eq!(saved.threshold, draft.threshold);
+            assert_eq!(saved.refresh_seconds, draft.refresh_seconds);
+            assert_eq!(saved.theme, draft.theme);
+            assert_eq!(saved.percentage_mode, draft.percentage_mode);
+            assert_eq!(saved.claude_windows, draft.claude_windows);
+            assert_eq!(saved.codex_windows, draft.codex_windows);
+            assert!(!saved.claude_enabled);
+            assert!(!saved.codex_enabled);
+            assert!(saved.launch_at_login_prompt_dismissed);
+            assert!(saved.history_recording);
+            assert_eq!(saved.history_retention, Retention::Days90);
+        }
+    }
 
-        let saved = merge_settings_draft(draft, &current);
-        assert!(!saved.claude_enabled);
-        assert!(!saved.codex_enabled);
-        assert!(saved.launch_at_login_prompt_dismissed);
-        assert!(saved.history_recording);
-        assert_eq!(saved.history_retention, Retention::Days90);
-        assert_eq!(saved.threshold, 15);
-        assert_eq!(saved.refresh_seconds, 120);
+    #[test]
+    fn narrow_settings_changes_leave_service_waits_and_inflight_polls_intact() {
+        let mut state = inner();
+        for (index, schedule) in state.schedules.iter_mut().enumerate() {
+            schedule.generation = index as u64 + 4;
+            schedule.poll_generation = Some(schedule.generation);
+            schedule.next_due = if index == 0 { 500 } else { 250 };
+            schedule.blocked_until = 700;
+            schedule.last_started = 190;
+            schedule.failures = 2;
+            schedule.cadence = 600;
+            schedule.waiting_for_sign_in = true;
+        }
+        let mut draft = DisplayPreferences::from(&state.view.settings);
+        draft.theme = settings::Theme::Dark;
+        save_settings_change(
+            &mut state,
+            |current| draft.clone().apply_to(current),
+            200,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(state.schedules[0].next_due, 500);
+        assert_eq!(state.schedules[1].next_due, 250);
 
-        let stale = Settings {
-            claude_enabled: false,
-            codex_enabled: false,
-            launch_at_login_prompt_dismissed: true,
-            ..Settings::default()
-        };
-        let saved = merge_settings_draft(stale, &Settings::default());
-        assert!(saved.claude_enabled);
-        assert!(saved.codex_enabled);
-        assert!(!saved.launch_at_login_prompt_dismissed);
+        draft.refresh_seconds = 120;
+        save_settings_change(
+            &mut state,
+            |current| draft.apply_to(current),
+            200,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(state.schedules[0].next_due, 320);
+        assert_eq!(state.schedules[1].next_due, 250);
+        save_settings_change(
+            &mut state,
+            |current| current.with_provider_selection(ProviderSelection::Claude),
+            200,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(state.schedules[0].next_due, 320);
+        assert_eq!(state.schedules[1].next_due, 0);
+        for (index, schedule) in state.schedules.iter().enumerate() {
+            assert_eq!(schedule.blocked_until, 700);
+            assert_eq!(schedule.next_due.max(schedule.blocked_until), 700);
+            assert_eq!(schedule.generation, index as u64 + 4);
+            assert_eq!(schedule.poll_generation, Some(schedule.generation));
+            assert_eq!(schedule.last_started, 190);
+            assert_eq!(schedule.failures, 2);
+            assert_eq!(schedule.cadence, 600);
+            assert!(schedule.waiting_for_sign_in);
+        }
+    }
+
+    #[test]
+    fn failed_settings_changes_do_not_publish_or_reschedule_unsaved_choices() {
+        let mut state = inner();
+        state.view.settings_error = Some("Previous settings error".into());
+        state.schedules[0].next_due = 500;
+        let original = state.view.clone();
+        let mut draft = DisplayPreferences::from(&original.settings);
+        draft.threshold = 101;
+        assert!(
+            save_settings_change(
+                &mut state,
+                |current| draft.clone().apply_to(current),
+                200,
+                |_| panic!("Invalid settings must not be written"),
+            )
+            .is_err()
+        );
+        assert!(state.view == original);
+        draft.threshold = 15;
+        draft.refresh_seconds = 120;
+        assert!(
+            save_settings_change(
+                &mut state,
+                |current| draft.clone().apply_to(current),
+                200,
+                |_| Err(SettingsError::Io(std::io::Error::other(
+                    "Synthetic write failure"
+                ))),
+            )
+            .is_err()
+        );
+        assert!(state.view == original);
+        assert_eq!(state.schedules[0].next_due, 500);
+
+        let saved = save_settings_change(
+            &mut state,
+            |current| draft.apply_to(current),
+            200,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(saved.settings.threshold, 15);
+        assert_eq!(saved.settings_error, None);
+        assert_eq!(saved.revision, 1);
+        assert_eq!(state.schedules[0].next_due, 320);
+    }
+
+    #[test]
+    fn snapshot_revisions_order_reads_command_replies_and_event_snapshots() {
+        let mut state = inner();
+        assert_eq!(state.view.revision, 0);
+        let initial_read = state.snapshot();
+        let mut draft = DisplayPreferences::from(&initial_read.settings);
+        draft.threshold = 15;
+        let reply = save_settings_change(
+            &mut state,
+            |current| draft.apply_to(current),
+            100,
+            |_| Ok(()),
+        )
+        .unwrap();
+        let event = state.snapshot();
+        assert!(initial_read.revision < reply.revision);
+        assert!(reply.revision < event.revision);
+        assert_eq!(initial_read.settings.threshold, 20);
+        assert_eq!(reply.settings, event.settings);
+        assert_eq!(event.settings.threshold, 15);
+        assert_eq!(
+            serde_json::to_value(&event).unwrap()["revision"],
+            event.revision
+        );
     }
 
     fn inner() -> Inner {
         Inner {
             view: AppState {
+                revision: 0,
                 settings: Settings::default(),
                 providers: vec![ProviderState {
                     id: ProviderId::Claude,

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/usage.test.mjs src/history-chart.test.mjs src/updates.test.mjs",
+    "test": "node --experimental-strip-types --test src/usage.test.mjs src/history-chart.test.mjs src/updates.test.mjs src/preferences.test.mjs",
     "build": "npm run check && vite build",
     "tauri": "tauri"
   },
