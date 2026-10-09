@@ -1,129 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AppState, Amount, DisplayPreferences, HistoryState, IssueKind, Limit, MiniLayout, PanelPreferences, PanelPreferencesState, PercentageMode, ProviderId, ProviderSelection, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
-import { createPreview } from "./preview";
-import { displayPreferences, latestSnapshot, previewDisplayPreferences, previewPanelPreferences, previewProviderSelection, visibleTrackedLimit } from "./preference-state";
-import { Startup, useLoginItem } from "./Startup";
+import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, ReconnectAction, RecoveryPhase, Settings, Theme } from "./types";
+import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
-import { HistorySettings } from "./HistorySettings";
 import { HistoryView } from "./HistoryView";
-import { Updates } from "./Updates";
-import { useUpdates } from "./useUpdates";
-import { compactLimits, eligibleQuota, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
+import { SettingsPanel } from "./SettingsPanel";
+import { ProviderFeedback } from "./AccountControls";
+import { Icon } from "./Icon";
+import { clientNames, issueStatuses, providerEnabled, providerNames, recoveryMessages } from "./provider-display";
+import { errorMessage, native, preview } from "./ui-state";
+import { defaultPanelPreferences, useAppController } from "./useAppController";
+import { compactLimits, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
-const native = isTauri();
-const preview = import.meta.env.DEV && !native;
-const defaultPanelPreferences: PanelPreferences = { pinned: false, mini: false, expanded: false, layout: "columns" };
-const providerNames: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
-const clientNames: Record<ProviderId, string> = { claude: "Claude Code", codex: "Codex" };
-const setupUrls: Record<ProviderId, string> = {
-  claude: "https://code.claude.com/docs/en/quickstart",
-  codex: "https://learn.chatgpt.com/docs/codex/cli",
-};
-const issueStatuses: Record<IssueKind, string> = {
-  sign_in: "Sign in needed", authentication: "Sign in needed", recovery: "Sign in needed",
-  credential_access: "Access needed", configuration: "Setup needed", client_missing: "Setup needed",
-  access_denied: "Access denied", network: "Unavailable", rate_limited: "Waiting",
-  service: "Unavailable", response: "Unavailable",
-};
-const recoveryMessages: Record<RecoveryPhase, string> = {
-  renewing: "Reconnecting", signing_in: "Finish signing in in your browser",
-  checking: "Checking usage", cancelling: "Cancelling",
-};
 const provenanceNames: Record<Limit["provenance"], string> = {
   official: "Official", local_estimate: "Local estimate", unknown: "Unknown source",
 };
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "Something went wrong. Try refreshing.";
-}
-
-function providerEnabled(settings: Settings, provider: ProviderId): boolean {
-  return provider === "claude" ? settings.claude_enabled : settings.codex_enabled;
-}
-
-function signInBlocked(provider: ProviderState, now: number): boolean {
-  const kind = provider.error?.kind;
-  const signInIssue = kind === "authentication" || kind === "sign_in" || kind === "recovery" || kind === "client_missing";
-  return provider.refreshing || provider.recovery !== null
-    || (kind !== undefined && !signInIssue)
-    || (provider.next_retry_at !== null && provider.next_retry_at > now && !signInIssue);
-}
-
-function SetupInstructions({ provider }: { provider: ProviderId }) {
-  const [opening, setOpening] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-
-  async function open() {
-    if (opening) return;
-    setOpening(true);
-    setFailure(null);
-    try { await invoke("open_setup_instructions", { provider }); }
-    catch (caught: unknown) { setFailure(errorMessage(caught)); }
-    finally { setOpening(false); }
-  }
-
-  return (
-    <div className="setup-instructions">
-      <a className="setup-link" href={setupUrls[provider]} target="_blank" rel="noopener noreferrer"
-        aria-label={`${clientNames[provider]} setup instructions (opens in browser)`} aria-disabled={opening}
-        onClick={(event) => {
-          if (native) {
-            event.preventDefault();
-            void open();
-          }
-        }}>
-        {opening ? "Opening instructions" : `${clientNames[provider]} setup`}<Icon name="external" />
-      </a>
-      {failure && <p className="setup-error" role="alert">{failure}</p>}
-    </div>
-  );
-}
-
-function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
-  provider: ProviderId; disabled: boolean; onContinue: () => void; onCancel: () => void;
-}) {
-  return (
-    <div className="sign-in-confirmation" role="group" aria-label={`Sign in with ${clientNames[provider]}`}
-      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancel(); } }}>
-      <p>This opens {clientNames[provider]}’s sign-in flow. Choosing another account also changes the account saved by {clientNames[provider]} on this Mac.</p>
-      <div className="recovery-actions">
-        <button className="primary-button" onClick={onContinue} disabled={disabled}>Continue</button>
-        <button className="text-button" onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-function DisconnectConfirmation({ provider, onConfirm, onCancel }: {
-  provider: ProviderId; onConfirm: () => void; onCancel: () => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && !element.open) element.showModal();
-  }, []);
-
-  return (
-    <dialog ref={dialog} className="disconnect-dialog" aria-labelledby={`${provider}-disconnect-title`}
-      aria-describedby={`${provider}-disconnect-description`} onClose={onCancel}
-      onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }}>
-      <h3 id={`${provider}-disconnect-title`}>Disconnect {providerNames[provider]} from Delta-V?</h3>
-      <p id={`${provider}-disconnect-description`}>Usage checks will stop and the current reading will be cleared. {clientNames[provider]} will stay signed in. You can reconnect at any time.</p>
-      <div className="dialog-actions">
-        <button className="text-button" autoFocus onClick={() => dialog.current?.close()}>Cancel</button>
-        <button className="primary-button" onClick={() => {
-          dialog.current?.close();
-          onConfirm();
-        }}>Disconnect</button>
-      </div>
-    </dialog>
-  );
-}
 
 function amountText(value: string, currency: string | null): string {
   return currency ? `${value} ${currency}` : `${value} credits`;
@@ -136,26 +29,6 @@ function amountDescription(amount: Amount): string | null {
   }
   if (amount.used !== null) return `${amountText(amount.used, amount.currency)} used`;
   return null;
-}
-
-function Icon({ name, spinning = false }: { name: "refresh" | "settings" | "quit" | "clock" | "close" | "chevron" | "external" | "pin" | "mini" | "expand" | "plus" | "minus" | "history"; spinning?: boolean }) {
-  return (
-    <svg className={spinning ? "icon spinning" : "icon"} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {name === "refresh" && <><path d="M16.4 7A6.5 6.5 0 0 0 5 4.8L2.8 7M3.6 13A6.5 6.5 0 0 0 15 15.2l2.2-2.2" /><path d="M2.8 3.2V7h3.8m10.6 9.8V13h-3.8" /></>}
-      {name === "settings" && <><path d="M4 3v14m6-14v14m6-14v14" /><path d="M2 7h4m2 6h4m2-8h4" strokeWidth="3" /></>}
-      {name === "quit" && <><path d="M10 2.5v7M6 4.5a6.5 6.5 0 1 0 8 0" /></>}
-      {name === "clock" && <><circle cx="10" cy="10" r="6.5" /><path d="M10 6v4l2.6 1.5" /></>}
-      {name === "close" && <path d="m5 5 10 10M15 5 5 15" />}
-      {name === "chevron" && <path d="m6 8 4 4 4-4" />}
-      {name === "external" && <><path d="M11 3h6v6m0-6L8 12" /><path d="M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" /></>}
-      {name === "pin" && <><path d="M7 3h6m-5 0v5l-3 3v2h10v-2l-3-3V3M10 13v4" /></>}
-      {name === "mini" && <path d="m3 3 5 5m-5 0h5V3m9 14-5-5m5 0h-5v5" />}
-      {name === "expand" && <path d="m12 8 5-5m-5 0h5v5M8 12l-5 5m5 0H3v-5" />}
-      {name === "plus" && <path d="M10 4v12M4 10h12" />}
-      {name === "minus" && <path d="M4 10h12" />}
-      {name === "history" && <path d="M3 3v14h14M6 12l3-5 4 3 4-6" />}
-    </svg>
-  );
 }
 
 function ResetTime({ timestamp, now }: { timestamp: number | null; now: number }) {
@@ -217,71 +90,6 @@ function ProviderDetails({ limits, warnings }: { limits: Limit[]; warnings: stri
       {notes.map((limit) => <p key={limit.id}><strong>{limit.label}:</strong> {limit.detail}</p>)}
       {warnings.map((warning) => <p key={warning}>{warning}</p>)}
     </details>
-  );
-}
-
-function ProviderFeedback({ provider, recovery, now, onReconnect, onCancel, showActions = true }: {
-  provider: ProviderState;
-  recovery: RecoveryPhase | null;
-  now: number;
-  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
-  onCancel: (provider: ProviderId) => void;
-  showActions?: boolean;
-}) {
-  const [confirmSignIn, setConfirmSignIn] = useState(false);
-  useEffect(() => { if (recovery) setConfirmSignIn(false); }, [recovery]);
-  if (recovery) {
-    return (
-      <div className="recovery-notice" role="status">
-        <p className="recovery-progress"><Icon name="refresh" spinning />{recoveryMessages[recovery]}</p>
-        {recovery === "signing_in" && <p className="recovery-help">Return here after finishing with {clientNames[provider.id]}.</p>}
-        {recovery !== "checking" && (
-          <button className="text-button" onClick={() => onCancel(provider.id)} disabled={recovery === "cancelling"}>Cancel</button>
-        )}
-      </div>
-    );
-  }
-  const issue = provider.error;
-  if (!issue) return null;
-  const canReconnect = issue.kind === "authentication" || issue.kind === "recovery";
-  const needsSignIn = issue.kind === "sign_in" || issue.kind === "client_missing";
-  let help: string | null = null;
-  if (issue.kind === "sign_in") {
-    help = provider.id === "claude"
-      ? "Sign in with your Claude subscription. Delta-V needs the standalone Claude Code terminal app. Claude Desktop alone does not connect it."
-      : "Sign in with your ChatGPT account. Delta-V can use the Codex client included with the ChatGPT or Codex Mac app, or a separate Codex CLI installation.";
-  } else if (issue.kind === "client_missing") {
-    help = provider.id === "claude"
-      ? "Install or update the standalone Claude Code terminal app, then sign in here. Claude Desktop alone does not connect Delta-V."
-      : "Update the ChatGPT or Codex Mac app, or install Codex CLI, then return here to sign in with your ChatGPT account.";
-  } else if (canReconnect) {
-    help = `Reconnect tries your saved ${clientNames[provider.id]} sign-in. Sign in again to connect another account.`;
-  } else if (issue.kind === "credential_access") {
-    help = "Check file and Keychain access for the CLI’s saved sign-in. The README lists the locations Delta-V reads.";
-  } else if (issue.kind === "configuration") {
-    help = "See “Connect your accounts” in the README for setup steps.";
-  }
-  return (
-    <div className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
-      <p>{issue.message}</p>
-      {help && <p className="recovery-help">{help}</p>}
-      {(needsSignIn || canReconnect) && <SetupInstructions provider={provider.id} />}
-      {showActions && (needsSignIn || canReconnect) && !confirmSignIn && (
-        <div className="recovery-actions">
-          <button className="primary-button" disabled={signInBlocked(provider, now)} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
-            {needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Reconnect"}
-          </button>
-          {canReconnect && <button className="text-button" disabled={signInBlocked(provider, now)} onClick={() => setConfirmSignIn(true)}>Sign in again</button>}
-        </div>
-      )}
-      {showActions && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInBlocked(provider, now)} onContinue={() => {
-        setConfirmSignIn(false);
-        onReconnect(provider.id, "sign_in");
-      }} onCancel={() => setConfirmSignIn(false)} />}
-      {provider.next_retry_at !== null && provider.next_retry_at > now && (
-        <p className="retry-time">{needsSignIn || canReconnect ? "Next check" : "Retry"} in {shortDuration(provider.next_retry_at - now)}</p>
-      )}
-    </div>
   );
 }
 
@@ -387,352 +195,38 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
   );
 }
 
-function WindowPicker({ provider, selected, onChange }: { provider: ProviderState; selected: string[]; onChange: (windows: string[]) => void }) {
-  const name = providerNames[provider.id];
-  const available = provider.snapshot?.limits.filter((limit) => limit.kind === "quota" && limit.enabled) ?? [];
-  const first = selected[0] ?? "";
-  const second = selected[1] ?? "";
-  const missing = selected.filter((id) => !available.some((limit) => limit.id === id));
-  return (
-    <fieldset className="window-picker">
-      <legend>{name}</legend>
-      <div className="window-picker-fields">
-        <label>
-          <span>First window</span>
-          <select aria-label={`${name} first window`} value={first} onChange={(event) => {
-            const value = event.target.value;
-            onChange(value ? [value, ...selected.slice(1).filter((id) => id !== value)] : []);
-          }}>
-            <option value="">Automatic</option>
-            {available.map((limit) => <option key={limit.id} value={limit.id}>{limit.label}</option>)}
-            {missing.map((id) => <option key={id} value={id}>{id} (unavailable)</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Second window</span>
-          <select aria-label={`${name} second window`} value={second} disabled={!first} onChange={(event) => {
-            const value = event.target.value;
-            onChange(value ? [first, value] : [first]);
-          }}>
-            <option value="">{first ? "None" : "Automatic"}</option>
-            {available.filter((limit) => limit.id !== first).map((limit) => <option key={limit.id} value={limit.id}>{limit.label}</option>)}
-            {missing.filter((id) => id !== first).map((id) => <option key={id} value={id}>{id} (unavailable)</option>)}
-          </select>
-        </label>
-      </div>
-      {!provider.snapshot && <p>Connect {name} to choose its windows.</p>}
-    </fieldset>
-  );
-}
-
-function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEnabled, onReconnect, onCancel }: {
-  provider: ProviderState;
-  enabled: boolean;
-  pending: boolean;
-  recovery: RecoveryPhase | null;
-  now: number;
-  paused: boolean;
-  onSetEnabled: (provider: ProviderId, enabled: boolean) => void;
-  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
-  onCancel: (provider: ProviderId) => void;
-}) {
-  const [confirmSignIn, setConfirmSignIn] = useState(false);
-  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  useEffect(() => { if (!enabled || recovery) setConfirmSignIn(false); }, [enabled, recovery]);
-  useEffect(() => { if (!enabled) setConfirmDisconnect(false); }, [enabled]);
-  const status = !enabled ? "Disconnected from Delta-V" : recovery ? recoveryMessages[recovery]
-    : provider.refreshing ? "Checking usage" : provider.error ? issueStatuses[provider.error.kind]
-    : provider.snapshot ? "Connected" : "Ready to check";
-  const canReconnect = provider.error?.kind === "authentication" || provider.error?.kind === "recovery";
-  const needsSignIn = provider.error?.kind === "sign_in" || provider.error?.kind === "client_missing";
-  const signInDisabled = paused || pending || recovery !== null || signInBlocked(provider, now);
-  return (
-    <div className="account-row" role="group" aria-label={`${providerNames[provider.id]} connection`} aria-busy={pending || recovery !== null}>
-      <div className="account-heading">
-        <div><h4>{providerNames[provider.id]}</h4><p>{status}</p></div>
-        <button className="text-button" aria-label={`${enabled ? "Disconnect" : "Connect"} ${providerNames[provider.id]}${enabled ? " from Delta-V" : ""}`} disabled={pending || (!enabled && recovery !== null)} onClick={() => {
-          if (enabled) {
-            setConfirmSignIn(false);
-            setConfirmDisconnect(true);
-          } else onSetEnabled(provider.id, true);
-        }}>
-          {pending ? enabled ? "Disconnecting" : "Connecting" : enabled ? "Disconnect" : "Connect"}
-        </button>
-      </div>
-      {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} showActions={false} />}
-      {enabled && !recovery && !confirmSignIn && <div className="account-actions">
-        {canReconnect && <button className="text-button" disabled={signInDisabled} onClick={() => onReconnect(provider.id, "renew")}>Reconnect</button>}
-        <button className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>{needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Sign in again"}</button>
-      </div>}
-      {enabled && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInDisabled} onContinue={() => {
-        setConfirmSignIn(false);
-        onReconnect(provider.id, "sign_in");
-      }} onCancel={() => setConfirmSignIn(false)} />}
-      {enabled && confirmDisconnect && <DisconnectConfirmation provider={provider.id} onConfirm={() => {
-        setConfirmDisconnect(false);
-        onSetEnabled(provider.id, false);
-      }} onCancel={() => setConfirmDisconnect(false)} />}
-    </div>
-  );
-}
-
-function SettingsPanel({ state, saving, now, pendingRecovery, pendingConnection, login, updates, miniLayout, onMiniLayoutChange, onHistoryChange, onSave, onClose, onThemePreview, onSetEnabled, onReconnect, onCancel }: {
-  state: AppState;
-  saving: boolean;
-  now: number;
-  pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
-  pendingConnection: Partial<Record<ProviderId, boolean>>;
-  login: ReturnType<typeof useLoginItem>;
-  updates: ReturnType<typeof useUpdates>;
-  miniLayout: MiniLayout;
-  onMiniLayoutChange: (layout: MiniLayout) => Promise<void>;
-  onHistoryChange: (history: HistoryState) => void;
-  onSave: (preferences: DisplayPreferences) => Promise<void>;
-  onClose: () => void;
-  onThemePreview: (theme: Theme | null) => void;
-  onSetEnabled: (provider: ProviderId, enabled: boolean) => void;
-  onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
-  onCancel: (provider: ProviderId) => void;
-}) {
-  const panel = useRef<HTMLElement>(null);
-  const [draft, setDraft] = useState(state.settings);
-  const [layoutDraft, setLayoutDraft] = useState(miniLayout);
-  const [submitting, setSubmitting] = useState(false);
-  const busy = saving || submitting;
-  const [threshold, setThreshold] = useState(String(state.settings.threshold));
-  const [interval, setIntervalValue] = useState(String(state.settings.refresh_seconds));
-  const [validation, setValidation] = useState<string | null>(null);
-  const options = state.providers
-    .filter((provider) => state.settings.providers === "both" || state.settings.providers === provider.id)
-    .flatMap((provider) => (provider.snapshot?.limits ?? [])
-      .filter((limit) => eligibleQuota(limit, now))
-      .map((limit) => ({ value: `${provider.id}:${limit.id}`, label: `${providerNames[provider.id]} · ${limit.label}` })));
-  const tracked = visibleTrackedLimit(draft.tracked_limit, state.settings.providers);
-  const missingTracked = tracked !== "auto" && !options.some((option) => option.value === tracked);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => panel.current?.scrollIntoView({ block: "start" }));
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  useEffect(() => () => onThemePreview(null), [onThemePreview]);
-
-  async function save() {
-    if (busy) return;
-    const parsedThreshold = Number(threshold);
-    const parsedInterval = Number(interval);
-    if (!threshold.trim() || !Number.isInteger(parsedThreshold) || parsedThreshold < 0 || parsedThreshold > 100) {
-      setValidation("Enter a whole-number remaining threshold from 0 to 100.");
-      return;
-    }
-    if (!interval.trim() || !Number.isInteger(parsedInterval) || parsedInterval < 30 || parsedInterval > 900) {
-      setValidation("Enter a refresh interval from 30 to 900 seconds.");
-      return;
-    }
-    setValidation(null);
-    setSubmitting(true);
-    try {
-      await onSave({
-        ...displayPreferences(draft), tracked_limit: tracked, threshold: parsedThreshold,
-        refresh_seconds: parsedInterval,
-      });
-      await onMiniLayoutChange(layoutDraft);
-      onClose();
-    } catch (error: unknown) {
-      setValidation(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <section ref={panel} className="settings-panel" aria-label="Settings"
-      onKeyDown={(event) => { if (busy && event.key === "Escape") event.stopPropagation(); }}>
-      <div className="settings-heading">
-        <h2>Settings</h2>
-        <button className="icon-button" onClick={onClose} disabled={busy} aria-label="Close settings"><Icon name="close" /></button>
-      </div>
-      <label className="setting-row">
-        <span>Menu bar tracks<small>Choose a usage window</small></span>
-        <select value={tracked} onChange={(event) => setDraft({ ...draft, tracked_limit: event.target.value })}>
-          <option value="auto">Most-used quota</option>
-          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          {missingTracked && <option value={tracked}>{tracked} (unavailable)</option>}
-        </select>
-      </label>
-      <div className="compact-settings">
-        <h3>Compact view</h3>
-        <p>Choose up to two windows per provider. Show more reveals the rest.</p>
-        <div className={`window-picker-grid${state.settings.providers === "both" ? " two-providers" : ""}`}>
-          {state.providers.filter((provider) => state.settings.providers === "both" || state.settings.providers === provider.id).map((provider) => {
-            const key = provider.id === "claude" ? "claude_windows" : "codex_windows";
-            return <WindowPicker key={provider.id} provider={provider} selected={draft[key]} onChange={(windows) => setDraft({ ...draft, [key]: windows })} />;
-          })}
-        </div>
-      </div>
-      <label className="setting-row">
-        <span>Mini layout<small>When both providers are pinned</small></span>
-        <select value={layoutDraft} disabled={busy} onChange={(event) => {
-          const layout = event.target.value;
-          if (layout === "columns" || layout === "stacked") setLayoutDraft(layout);
-        }}>
-          <option value="columns">Side by side</option>
-          <option value="stacked">Stacked</option>
-        </select>
-      </label>
-      <label className="setting-row">
-        <span>Show percentages as<small>Menu bar and quota bars</small></span>
-        <select value={draft.percentage_mode} onChange={(event) => {
-          const percentage_mode = event.target.value;
-          if (percentage_mode === "remaining" || percentage_mode === "used") setDraft({ ...draft, percentage_mode });
-        }}>
-          <option value="remaining">Remaining</option>
-          <option value="used">Used</option>
-        </select>
-      </label>
-      <label className="setting-row">
-        <span>Low budget threshold<small>Highlight when less than this percentage remains</small></span>
-        <span className="number-field">
-          <input type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
-          <span>%</span>
-        </span>
-      </label>
-      <label className="setting-row">
-        <span>Refresh interval<small>Backoff applies when rate limited</small></span>
-        <span className="number-field">
-          <input type="number" min="30" max="900" step="1" inputMode="numeric" value={interval} onChange={(event) => setIntervalValue(event.target.value)} />
-          <span>sec</span>
-        </span>
-      </label>
-      <label className="setting-row">
-        <span>Appearance</span>
-        <select value={draft.theme} onChange={(event) => {
-          const theme = event.target.value;
-          if (theme === "system" || theme === "light" || theme === "dark") {
-            setDraft({ ...draft, theme });
-            onThemePreview(theme);
-          }
-        }}>
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      {validation && <p className="settings-validation" role="alert">{validation}</p>}
-      <div className="settings-actions">
-        <button className="text-button" onClick={onClose} disabled={busy}>Cancel</button>
-        <button className="primary-button" onClick={() => void save()} disabled={busy}>{busy ? "Saving" : "Save settings"}</button>
-      </div>
-      <Startup login={login} mode="settings" dismissed={state.settings.launch_at_login_prompt_dismissed} />
-      <HistorySettings settings={state.settings} onChange={onHistoryChange} />
-      <section className="accounts-settings" aria-label="Accounts">
-        <h3>Accounts</h3>
-        <p>Changes here apply immediately. Disconnect stops usage checks in Delta-V. It does not sign you out of Claude Code or Codex.</p>
-        <div className="accounts-list">
-          {state.providers.map((provider) => (
-            <AccountRow key={provider.id} provider={provider} enabled={providerEnabled(state.settings, provider.id)}
-              pending={pendingConnection[provider.id] ?? false} now={now} paused={state.paused}
-              recovery={pendingRecovery[provider.id] === "cancelling" ? "cancelling" : provider.recovery ?? pendingRecovery[provider.id] ?? null}
-              onSetEnabled={onSetEnabled} onReconnect={onReconnect} onCancel={onCancel} />
-          ))}
-        </div>
-      </section>
-      <Updates updates={updates} now={now} />
-    </section>
-  );
-}
-
 export default function App() {
-  const [state, setState] = useState<AppState | null>(() => preview ? createPreview(window.location.search) : null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    state, error, setError, now, login, updates,
+    panelPreferences, panelReady, panelBusy, panelCommandPending,
+    saving, pendingRecovery, pendingConnection,
+    saveDisplayPreferences, selectProviders, savePanelPreferences, changePanelPreferences,
+    updateHistoryPreferences, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
+  } = useAppController();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [panelPreferences, setPanelPreferences] = useState<PanelPreferences | null>(preview ? defaultPanelPreferences : null);
-  const panelPreferencesRef = useRef(panelPreferences);
-  const panelSnapshotRef = useRef<PanelPreferencesState | null>(preview
-    ? { revision: 0, preferences: defaultPanelPreferences, error: null } : null);
-  const panelCommandPending = useRef(false);
-  const panelReadGeneration = useRef(0);
   const [showDragHint, setShowDragHint] = useState(false);
-  const [panelPending, setPanelPending] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [keyboardNavigation, setKeyboardNavigation] = useState(false);
-  const [pendingRecovery, setPendingRecovery] = useState<Partial<Record<ProviderId, RecoveryPhase>>>({});
-  const [pendingConnection, setPendingConnection] = useState<Partial<Record<ProviderId, boolean>>>({});
-  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   const shell = useRef<HTMLDivElement>(null);
   const focusFrame = useRef(0);
   const content = useRef<HTMLDivElement>(null);
   const lastSize = useRef("");
-  const recoveryCommands = useRef(new Set<ProviderId>());
-  const connectionCommands = useRef(new Set<ProviderId>());
-  const previewTimers = useRef<Partial<Record<ProviderId, number>>>({});
   const selection = state?.settings.providers ?? "both";
   const theme: Theme = (settingsOpen ? themePreview : null) ?? state?.settings.theme ?? "system";
   const { pinned, mini, expanded: miniExpanded, layout: miniLayout } = panelPreferences ?? defaultPanelPreferences;
-  const panelReady = state !== null && panelPreferences !== null;
-  const panelBusy = !panelReady || panelPending;
   const miniActive = mini && pinned && !settingsOpen && !historyOpen;
-  const applyAppState = useCallback((next: AppState) => {
-    setState((current) => latestSnapshot(current, next));
-  }, []);
-  const applyPanelState = useCallback((next: PanelPreferencesState) => {
-    const accepted = latestSnapshot(panelSnapshotRef.current, next);
-    if (accepted !== next) return accepted.preferences;
-    const previousError = panelSnapshotRef.current?.error;
-    panelSnapshotRef.current = next;
-    panelPreferencesRef.current = next.preferences;
-    setPanelPreferences(next.preferences);
-    setError((current) => next.error ?? (current === previousError ? null : current));
-    return next.preferences;
-  }, []);
-  const dismissStartupPrompt = useCallback(() => {
-    // Native preference changes arrive in revisioned usage-updated snapshots.
-    if (!preview) return;
-    setState((current) => current ? {
-      ...current, settings: { ...current.settings, launch_at_login_prompt_dismissed: true },
-    } : current);
-  }, []);
-  const login = useLoginItem(dismissStartupPrompt);
-  const updates = useUpdates();
-  const updateHistoryPreferences = useCallback((history: HistoryState) => {
-    if (!preview) return;
-    setState((current) => {
-      if (!current || (current.settings.history_recording === history.recording && current.settings.history_retention === history.retention)) return current;
-      return { ...current, settings: { ...current.settings, history_recording: history.recording, history_retention: history.retention } };
-    });
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    const recoveryTimers = previewTimers.current;
-    return () => {
-      window.clearInterval(timer);
-      for (const recoveryTimer of Object.values(recoveryTimers)) window.clearTimeout(recoveryTimer);
-    };
-  }, []);
 
   useEffect(() => {
     if (!native) return;
     let disposed = false;
-    let unlisten: (() => void) | undefined;
     let unlistenOpen: (() => void) | undefined;
     let unlistenMove: (() => void) | undefined;
-    let unlistenPanel: (() => void) | undefined;
     void getCurrentWindow().onMoved(() => {
       if (!disposed) setShowDragHint(false);
     }).then((stop) => { if (disposed) stop(); else unlistenMove = stop; })
       .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    void listen<PanelPreferencesState>("panel-preferences-updated", (event) => {
-      if (!disposed) applyPanelState(event.payload);
-    }).then(async (stop) => {
-      if (disposed) { stop(); return; }
-      unlistenPanel = stop;
-      const saved = await invoke<PanelPreferencesState>("get_panel_preferences");
-      if (!disposed) applyPanelState(saved);
-    }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
@@ -744,16 +238,8 @@ export default function App() {
         focusFrame.current = window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
       }
     }).then((stop) => { if (disposed) stop(); else unlistenOpen = stop; }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    void listen<AppState>("usage-updated", (event) => {
-      if (!disposed) applyAppState(event.payload);
-    }).then(async (stop) => {
-      if (disposed) { stop(); return; }
-      unlisten = stop;
-      const initial = await invoke<AppState>("get_state");
-      if (!disposed) applyAppState(initial);
-    }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; unlisten?.(); unlistenOpen?.(); unlistenMove?.(); unlistenPanel?.(); window.cancelAnimationFrame(focusFrame.current); };
-  }, [applyAppState, applyPanelState]);
+    return () => { disposed = true; unlistenOpen?.(); unlistenMove?.(); window.cancelAnimationFrame(focusFrame.current); };
+  }, [setError]);
 
   useEffect(() => {
     const element = shell.current;
@@ -813,36 +299,6 @@ export default function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [settingsOpen, historyOpen]);
 
-  const savePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
-    const current = panelPreferencesRef.current;
-    if (!current) throw new Error("Panel preferences are still loading. Try again in a moment.");
-    if (panelCommandPending.current) throw new Error("Wait for the panel change to finish, then try again.");
-    panelCommandPending.current = true;
-    setPanelPending(true);
-    setError(null);
-    try {
-      const saved = preview ? {
-        revision: (panelSnapshotRef.current?.revision ?? 0) + 1,
-        preferences: previewPanelPreferences(current, changes), error: null,
-      } : await invoke<PanelPreferencesState>("save_panel_preferences", { patch: changes });
-      return applyPanelState(saved);
-    } finally {
-      panelCommandPending.current = false;
-      setPanelPending(false);
-    }
-  }, [applyPanelState]);
-
-  const changePanelPreferences = useCallback(async (changes: Partial<PanelPreferences>) => {
-    if (panelCommandPending.current || !panelPreferencesRef.current) return false;
-    try {
-      await savePanelPreferences(changes);
-      return true;
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-      return false;
-    }
-  }, [savePanelPreferences]);
-
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || saving || panelCommandPending.current) return;
@@ -865,185 +321,6 @@ export default function App() {
     const nextPinned = !pinned;
     if (await changePanelPreferences(nextPinned ? { pinned: true } : { pinned: false, mini: false, expanded: false })) {
       setShowDragHint(nextPinned);
-    }
-  }
-
-  const saveSettings = useCallback(async (preferences: DisplayPreferences) => {
-    setSaving(true);
-    try {
-      if (preview) setState((current) => current ? {
-        ...current, revision: current.revision + 1,
-        settings: previewDisplayPreferences(current.settings, preferences),
-      } : current);
-      else {
-        const saved = await invoke<AppState>("save_display_preferences", { preferences });
-        applyAppState(saved);
-      }
-      setError(null);
-    } finally {
-      setSaving(false);
-    }
-  }, [applyAppState]);
-
-  async function selectProviders(providers: ProviderSelection) {
-    if (!state || saving || panelBusy) return;
-    setSaving(true);
-    try {
-      if (preview) setState((current) => current ? {
-        ...current, revision: current.revision + 1,
-        settings: previewProviderSelection(current.settings, providers),
-      } : current);
-      else applyAppState(await invoke<AppState>("set_provider_selection", { providers }));
-      setError(null);
-    }
-    catch (caught: unknown) { setError(errorMessage(caught)); }
-    finally { setSaving(false); }
-  }
-
-  async function refresh() {
-    if (recoveryCommands.current.size > 0 || connectionCommands.current.size > 0 || state?.providers.some((provider) => provider.recovery !== null)) return;
-    setError(null);
-    if (preview) {
-      setState((current) => current ? { ...current, providers: current.providers.map((provider) => ({ ...provider, snapshot: providerEnabled(current.settings, provider.id) && provider.snapshot ? { ...provider.snapshot, fetched_at: Math.floor(Date.now() / 1000) } : null })) } : current);
-      return;
-    }
-    try { await invoke("refresh_usage"); }
-    catch (caught: unknown) { setError(errorMessage(caught)); }
-  }
-
-  function setPreviewRecovery(providerId: ProviderId, recovery: RecoveryPhase | null) {
-    setState((current) => current ? {
-      ...current,
-      providers: current.providers.map((provider) => provider.id === providerId ? { ...provider, recovery } : provider),
-    } : current);
-  }
-
-  function simulateRecovery(providerId: ProviderId, action: ReconnectAction) {
-    setState((current) => current ? {
-      ...current, providers: current.providers.map((provider) => provider.id === providerId ? {
-        ...provider, snapshot: null, error: null, recovery: action === "renew" ? "renewing" : "signing_in", stale: true,
-      } : provider),
-    } : current);
-    previewTimers.current[providerId] = window.setTimeout(() => {
-      setPreviewRecovery(providerId, "checking");
-      previewTimers.current[providerId] = window.setTimeout(() => {
-        const sample = createPreview().providers.find((provider) => provider.id === providerId);
-        if (sample?.snapshot) {
-          const connected = { ...sample, snapshot: { ...sample.snapshot, fetched_at: Math.floor(Date.now() / 1000) } };
-          setState((current) => current && providerEnabled(current.settings, providerId) ? {
-            ...current,
-            providers: current.providers.map((provider) => provider.id === providerId ? connected : provider),
-          } : current);
-        }
-        delete previewTimers.current[providerId];
-      }, 900);
-    }, action === "renew" ? 1500 : 5000);
-  }
-
-  function clearPendingRecovery(provider: ProviderId) {
-    recoveryCommands.current.delete(provider);
-    setPendingRecovery((current) => {
-      const next = { ...current };
-      delete next[provider];
-      return next;
-    });
-  }
-
-  async function reconnect(provider: ProviderId, action: ReconnectAction) {
-    const current = state?.providers.find((candidate) => candidate.id === provider);
-    if (!state || !current || !providerEnabled(state.settings, provider) || state.paused || current.recovery || current.refreshing
-      || recoveryCommands.current.has(provider) || connectionCommands.current.has(provider)) return;
-    if (action === "sign_in" && signInBlocked(current, now)) return;
-    recoveryCommands.current.add(provider);
-    setPendingRecovery((pending) => ({ ...pending, [provider]: action === "renew" ? "renewing" : "signing_in" }));
-    setError(null);
-    try {
-      if (preview) simulateRecovery(provider, action);
-      else if (native) await invoke("reconnect_provider", { provider, action });
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-    } finally {
-      clearPendingRecovery(provider);
-    }
-  }
-
-  async function cancelReconnect(provider: ProviderId) {
-    const current = state?.providers.find((candidate) => candidate.id === provider);
-    if (!current?.recovery || current.recovery === "checking" || current.recovery === "cancelling" || recoveryCommands.current.has(provider)) return;
-    recoveryCommands.current.add(provider);
-    setPendingRecovery((pending) => ({ ...pending, [provider]: "cancelling" }));
-    setError(null);
-    try {
-      if (preview) {
-        window.clearTimeout(previewTimers.current[provider]);
-        setPreviewRecovery(provider, "cancelling");
-        previewTimers.current[provider] = window.setTimeout(() => {
-          setState((currentState) => currentState ? {
-            ...currentState, providers: currentState.providers.map((candidate) => candidate.id === provider ? {
-              ...candidate, recovery: null,
-              error: providerEnabled(currentState.settings, provider) ? { kind: "recovery", message: "Sign-in was cancelled. Reconnect when you are ready." } : null,
-            } : candidate),
-          } : currentState);
-          delete previewTimers.current[provider];
-        }, 300);
-      } else if (native) await invoke("cancel_reconnect", { provider });
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-    } finally {
-      clearPendingRecovery(provider);
-    }
-  }
-
-  async function setProviderEnabled(providerId: ProviderId, enabled: boolean) {
-    if (!state || providerEnabled(state.settings, providerId) === enabled || connectionCommands.current.has(providerId)) return;
-    const provider = state.providers.find((candidate) => candidate.id === providerId);
-    if (!provider || (enabled && provider.recovery !== null)) return;
-    connectionCommands.current.add(providerId);
-    setPendingConnection((pending) => ({ ...pending, [providerId]: true }));
-    setError(null);
-    try {
-      if (preview) {
-        window.clearTimeout(previewTimers.current[providerId]);
-        delete previewTimers.current[providerId];
-        const sample = createPreview().providers.find((candidate) => candidate.id === providerId);
-        const recovering = provider.recovery !== null;
-        setState((current) => current ? {
-          ...current,
-          settings: { ...current.settings, [providerId === "claude" ? "claude_enabled" : "codex_enabled"]: enabled },
-          providers: current.providers.map((candidate) => candidate.id !== providerId ? candidate : enabled && sample ? sample : {
-            ...candidate, snapshot: null, error: null, refreshing: false, stale: true,
-            next_retry_at: null, recovery: recovering ? "cancelling" : null,
-          }),
-        } : current);
-        if (recovering) previewTimers.current[providerId] = window.setTimeout(() => {
-          setPreviewRecovery(providerId, null);
-          delete previewTimers.current[providerId];
-        }, 300);
-      } else if (native) await invoke("set_provider_enabled", { provider: providerId, enabled });
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-    } finally {
-      connectionCommands.current.delete(providerId);
-      setPendingConnection((pending) => {
-        const next = { ...pending };
-        delete next[providerId];
-        return next;
-      });
-    }
-  }
-
-  async function retryInitialRead() {
-    const panelRead = ++panelReadGeneration.current;
-    setError(null);
-    try {
-      const [initial, saved] = await Promise.all([
-        invoke<AppState>("get_state"), invoke<PanelPreferencesState>("get_panel_preferences"),
-      ]);
-      if (panelRead !== panelReadGeneration.current) return;
-      applyAppState(initial);
-      applyPanelState(saved);
-    } catch (caught: unknown) {
-      if (panelRead === panelReadGeneration.current) setError(errorMessage(caught));
     }
   }
 
@@ -1162,7 +439,7 @@ export default function App() {
               pending={panelBusy} pendingRecovery={pendingRecovery}
               onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
           ) : panelReady && settingsOpen && state ? (
-            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} updates={updates} onSave={saveSettings} onHistoryChange={updateHistoryPreferences}
+            <SettingsPanel key={selection} state={state} saving={saving || panelBusy} now={now} updates={updates} onSave={saveDisplayPreferences} onHistoryChange={updateHistoryPreferences}
               pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} login={login}
               miniLayout={miniLayout} onMiniLayoutChange={async (layout) => { await savePanelPreferences({ layout }); }}
               onClose={() => setSettingsOpen(false)} onThemePreview={setThemePreview}
