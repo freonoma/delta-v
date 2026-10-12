@@ -66,6 +66,16 @@ CSV exports use the same account and quota filters but retain original readings 
 
 PNG exports reuse the chart geometry, with fixed dimensions and no account keys. They include the selected windows, dates, units, provenance and coverage, plus a small Delta-V mark. Check both appearance modes and sparse history. Native Save, overwrite confirmation, Cancel, Copy image and Show history folder need a macOS check, including while pinned. The browser preview downloads synthetic files with a `Sample-` filename prefix and does not access the clipboard or Finder.
 
+### Notification evaluation
+
+`src-tauri/src/notifications.rs` contains the in-memory low-allowance evaluator. It is not connected to polling or native delivery yet. Feed it only accepted successful responses, an independently verified opaque account key, and the current polling cadence's freshness allowance. It does not read credentials, request identity, write files, or depend on history recording.
+
+The first eligible reading is a silent baseline, even if already low. A later reading must cross from at or above the threshold to below it. Compare remaining allowance at the same precision as highlighting, not rounded display percentages. Evaluate each enabled official quota independently; exclude expired, reset-less, invalid, positional, and ambiguous duplicate limits. Errors must not replay cached readings as new observations.
+
+Keep duplicate prevention per provider, account and quota in memory. A period can produce one crossing candidate. Reset timestamp corrections do not rearm it before the recorded boundary has elapsed, and a new period still needs a fresh future reset and a silent first reading. Missing or invalid limits preserve prior valid state. Account changes, lost identity, recovery and notification policy changes require a fresh baseline while preserving already-emitted periods. Restarting the app starts new in-memory state; there is no guarantee of deduplication across restarts. A crossing candidate does not confirm delivery.
+
+When integrating native delivery, evaluate accepted results under the runtime lock and deliver afterward. Claude's verified account lookup must work when notifications are enabled even if history is off, without enabling history writes. Hidden providers currently stop polling when history is off, so notification integration must also define which connected providers it monitors. Add permission and preference handling before activating either behavior.
+
 ## Checking your work
 
 For code changes, run these from the project root:

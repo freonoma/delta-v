@@ -3,6 +3,9 @@ mod history;
 mod history_export;
 mod history_query;
 mod model;
+// Runtime integration follows with opt-in native delivery. Keep this unit pure.
+#[allow(dead_code)]
+mod notifications;
 mod panel_state;
 mod platform;
 mod providers;
