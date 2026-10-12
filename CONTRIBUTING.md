@@ -66,15 +66,21 @@ CSV exports use the same account and quota filters but retain original readings 
 
 PNG exports reuse the chart geometry, with fixed dimensions and no account keys. They include the selected windows, dates, units, provenance and coverage, plus a small Delta-V mark. Check both appearance modes and sparse history. Native Save, overwrite confirmation, Cancel, Copy image and Show history folder need a macOS check, including while pinned. The browser preview downloads synthetic files with a `Sample-` filename prefix and does not access the clipboard or Finder.
 
-### Notification evaluation
+### Notifications
 
-`src-tauri/src/notifications.rs` contains the in-memory low-allowance evaluator. It is not connected to polling or native delivery yet. Feed it only accepted successful responses, an independently verified opaque account key, and the current polling cadence's freshness allowance. It does not read credentials, request identity, write files, or depend on history recording.
+`src-tauri/src/notifications.rs` contains the in-memory low-allowance evaluator. The runtime feeds it accepted successful responses, an independently verified opaque account key, and the current polling cadence's freshness allowance. The evaluator does not read credentials, request identity, write files, or depend on history recording.
 
 The first eligible reading is a silent baseline, even if already low. A later reading must cross from at or above the threshold to below it. Compare remaining allowance at the same precision as highlighting, not rounded display percentages. Evaluate each enabled official quota independently; exclude expired, reset-less, invalid, positional, and ambiguous duplicate limits. Errors must not replay cached readings as new observations.
 
 Keep duplicate prevention per provider, account and quota in memory. A period can produce one crossing candidate. Reset timestamp corrections do not rearm it before the recorded boundary has elapsed, and a new period still needs a fresh future reset and a silent first reading. Missing or invalid limits preserve prior valid state. Account changes, lost identity, recovery and notification policy changes require a fresh baseline while preserving already-emitted periods. Restarting the app starts new in-memory state; there is no guarantee of deduplication across restarts. A crossing candidate does not confirm delivery.
 
-When integrating native delivery, evaluate accepted results under the runtime lock and deliver afterward. Claude's verified account lookup must work when notifications are enabled even if history is off, without enabling history writes. Hidden providers currently stop polling when history is off, so notification integration must also define which connected providers it monitors. Add permission and preference handling before activating either behavior.
+`notification_delivery.rs` checks macOS permission without prompting, evaluates under the runtime lock, then delivers outside that lock. Tickets reject obsolete readings after policy, connection or recovery changes. Notifications start off and monitor both connected providers when enabled, including a provider hidden by the panel picker. Claude's verified account lookup works independently of history recording; enabling notifications does not enable history writes.
+
+`platform/notifications.rs` uses UserNotifications for local alerts without sound or badges. Only an explicit enable command from the Settings window can request permission. Permission reads and automatic checks never prompt. A delivery failure is reported and is not retried with an old reading. Clicking an alert shows usage without discarding a Settings draft. The notification includes the provider, quota labels and remaining threshold, never account identifiers or credentials.
+
+The Settings controls are a separate implementation unit. Backend commands already support permission status, enabling/disabling, a test notification and opening macOS notification settings. Test notifications require an enabled preference and existing alert permission. macOS accepting a request does not prove a banner appeared; Focus and system presentation settings can suppress it.
+
+Ordinary `tauri dev` executables report notifications as unavailable because they lack an app bundle identity. Native smoke tests need a built `Delta-V.app`. Check first enable, denied permission, permission changes in System Settings, test delivery, foreground presentation and clicking an alert while Settings has unsaved changes. The System Settings link is best effort; the manual route is **System Settings > Notifications > Delta-V**. Automated tests use synthetic readings and permission values, without requesting permission or sending real notifications.
 
 ## Checking your work
 

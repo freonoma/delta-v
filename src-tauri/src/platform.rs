@@ -6,6 +6,7 @@ pub mod calendar;
 mod claude_auth;
 pub mod exports;
 pub mod login_item;
+pub mod notifications;
 
 use std::{
     ffi::c_void,
@@ -244,6 +245,27 @@ pub fn toggle_popover(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn hide_popover(app: &AppHandle) -> tauri::Result<()> {
     dismiss_popover(app, false)
+}
+
+pub fn show_usage_from_notification(app: &AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if exports::dialog_open() {
+            return;
+        }
+        handle
+            .state::<PopoverState>()
+            .restore_pending
+            .store(false, Ordering::Relaxed);
+        // A notification opens usage even when the panel is already visible. Settings drafts stay open.
+        if let Err(error) = handle.emit("popover-reset", ()) {
+            eprintln!("Could not prepare the usage panel: {error}");
+        }
+        if let Err(error) = return_from_settings(&handle, true) {
+            eprintln!("Could not show usage from the notification: {error}");
+        }
+    })
+    .map_err(|_| "Could not show the usage panel.".to_owned())
 }
 
 // These handoff operations run on the main thread, before Settings changes keyboard focus.

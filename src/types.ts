@@ -110,6 +110,7 @@ export interface Settings {
   claude_enabled: boolean;
   codex_enabled: boolean;
   launch_at_login_prompt_dismissed: boolean;
+  notifications_enabled: boolean;
   history_recording: boolean;
   history_retention: HistoryRetention;
   tracked_limit: string;

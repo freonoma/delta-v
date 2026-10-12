@@ -108,7 +108,7 @@ pub trait Provider {
 
 pub struct ClaudeProvider<'a> {
     pub client: &'a Client,
-    pub history: Option<&'a IdentityCache>,
+    pub identity: Option<&'a IdentityCache>,
 }
 
 pub struct CodexProvider<'a> {
@@ -123,8 +123,8 @@ impl Provider for ClaudeProvider<'_> {
     async fn fetch(&self) -> Result<ProviderSnapshot, ProviderError> {
         let (value, credential) = fetch_json(self.id(), self.client).await?;
         let mut snapshot = claude::parse(value, now()).map_err(ProviderError::Response)?;
-        if let Some(history) = self.history {
-            snapshot.history_account = history.claude(self.client, &credential.access_token).await;
+        if let Some(identity) = self.identity {
+            snapshot.history_account = identity.claude(self.client, &credential.access_token).await;
         }
         Ok(snapshot)
     }
@@ -258,7 +258,7 @@ mod tests {
         let client = client().unwrap();
         let snapshot = ClaudeProvider {
             client: &client,
-            history: None,
+            identity: None,
         }
         .fetch()
         .await

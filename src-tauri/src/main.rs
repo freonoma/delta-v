@@ -3,8 +3,7 @@ mod history;
 mod history_export;
 mod history_query;
 mod model;
-// Runtime integration follows with opt-in native delivery. Keep this unit pure.
-#[allow(dead_code)]
+mod notification_delivery;
 mod notifications;
 mod panel_state;
 mod platform;
@@ -250,6 +249,54 @@ async fn open_login_item_settings() -> Result<(), String> {
     .map_err(|_| "Could not open Login Items. Open System Settings and try again.".to_owned())?
 }
 
+fn require_notification_settings(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "settings" {
+        Ok(())
+    } else {
+        Err("Manage notifications in Settings.".into())
+    }
+}
+
+#[tauri::command]
+async fn get_notification_state(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<notification_delivery::NotificationStatus, String> {
+    require_notification_settings(&window)?;
+    notification_delivery::state(&app).await
+}
+
+#[tauri::command]
+async fn set_notifications_enabled(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    enabled: bool,
+) -> Result<notification_delivery::NotificationStatus, String> {
+    require_notification_settings(&window)?;
+    notification_delivery::set_enabled(&app, enabled).await
+}
+
+#[tauri::command]
+async fn send_test_notification(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    require_notification_settings(&window)?;
+    notification_delivery::send_test(&app).await
+}
+
+#[tauri::command]
+async fn open_notification_settings(window: tauri::WebviewWindow) -> Result<(), String> {
+    require_notification_settings(&window)?;
+    tokio::task::spawn_blocking(|| {
+        platform::notifications::open_settings().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| {
+        "Could not open Notifications. Open System Settings > Notifications > Delta-V.".to_owned()
+    })?
+}
+
 #[tauri::command]
 fn save_display_preferences(
     app: tauri::AppHandle,
@@ -369,6 +416,10 @@ fn main() -> tauri::Result<()> {
             set_launch_at_login,
             dismiss_launch_at_login_prompt,
             open_login_item_settings,
+            get_notification_state,
+            set_notifications_enabled,
+            send_test_notification,
+            open_notification_settings,
             save_display_preferences,
             set_provider_selection,
             hide_popover,
@@ -385,7 +436,11 @@ fn main() -> tauri::Result<()> {
             app.manage(runtime::Runtime::new()?);
             app.manage(updates::UpdateChecker::default());
             app.manage(settings_window::SettingsWindowState::default());
+            app.manage(notification_delivery::Delivery::default());
             tray::install(app)?;
+            if let Err(error) = platform::notifications::configure(app.handle()) {
+                eprintln!("Notifications are unavailable: {error}");
+            }
             runtime::start(app.handle().clone());
             Ok(())
         })

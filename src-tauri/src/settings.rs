@@ -55,6 +55,7 @@ pub struct Settings {
     pub percentage_mode: PercentageMode,
     pub claude_windows: Vec<String>,
     pub codex_windows: Vec<String>,
+    pub notifications_enabled: bool,
     pub history_recording: bool,
     pub history_retention: Retention,
 }
@@ -120,6 +121,7 @@ impl Default for Settings {
             percentage_mode: PercentageMode::Remaining,
             claude_windows: Vec::new(),
             codex_windows: Vec::new(),
+            notifications_enabled: false,
             history_recording: false,
             history_retention: Retention::Forever,
         }
@@ -262,6 +264,7 @@ mod tests {
             "claude_enabled",
             "codex_enabled",
             "launch_at_login_prompt_dismissed",
+            "notifications_enabled",
             "history_recording",
             "history_retention",
         ] {
@@ -356,7 +359,27 @@ mod tests {
         assert!(settings.codex_enabled);
         assert!(settings.launch_at_login_prompt_dismissed);
         assert!(!settings.history_recording);
+        assert!(!settings.notifications_enabled);
         assert_eq!(settings.history_retention, Retention::Forever);
+    }
+
+    #[test]
+    fn notifications_start_off_and_survive_unrelated_display_changes() {
+        assert!(!Settings::default().notifications_enabled);
+        let draft = DisplayPreferences::from(&Settings::default());
+        let enabled = Settings {
+            notifications_enabled: true,
+            ..Settings::default()
+        };
+        let restored: Settings = toml::from_str(&toml::to_string(&enabled).unwrap()).unwrap();
+        assert!(restored.notifications_enabled);
+        assert!(draft.apply_to(&restored).unwrap().notifications_enabled);
+        assert!(
+            restored
+                .with_provider_selection(ProviderSelection::Claude)
+                .unwrap()
+                .notifications_enabled
+        );
     }
 
     #[test]

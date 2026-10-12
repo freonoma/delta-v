@@ -14,6 +14,7 @@ use crate::{
     credentials,
     history::Retention,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
+    notifications::{Evaluator, LowAllowance},
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
     recording::{HistoryState, Recorder},
@@ -73,6 +74,17 @@ struct Schedule {
 struct Inner {
     view: AppState,
     schedules: [Schedule; 2],
+    notifications: Evaluator,
+    notification_generation: u64,
+    notification_permission: Option<bool>,
+}
+
+/// An accepted reading, kept in Rust while notification permission is checked.
+#[derive(Clone)]
+pub struct NotificationTicket {
+    pub snapshot: ProviderSnapshot,
+    connection_generation: u64,
+    policy_generation: u64,
 }
 
 impl Inner {
@@ -132,6 +144,9 @@ impl Runtime {
                     paused: false,
                 },
                 schedules: Default::default(),
+                notifications: Evaluator::default(),
+                notification_generation: 0,
+                notification_permission: None,
             }),
             client: providers::client()?,
             wake: Notify::new(),
@@ -157,6 +172,46 @@ impl Runtime {
         self.save_change(|current| current.with_provider_selection(providers))
     }
 
+    pub fn set_notifications_enabled(&self, enabled: bool) -> Result<AppState, String> {
+        let mut inner = self.inner.lock().map_err(|_| "Could not save settings.")?;
+        let view =
+            save_notifications_enabled(&mut inner, enabled, providers::now(), settings::save)?;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(view)
+    }
+
+    /// Record permission reads outside polling so restoring access starts with a fresh baseline.
+    pub fn update_notification_permission(&self, can_deliver: bool) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not update notification permission.".to_owned())?;
+        update_notification_permission(&mut inner, can_deliver)
+    }
+
+    pub fn notification_candidates(
+        &self,
+        ticket: &NotificationTicket,
+        can_deliver: bool,
+    ) -> Result<Vec<LowAllowance>, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not evaluate usage notifications.".to_owned())?;
+        if self.quitting.load(Ordering::Relaxed) {
+            return Ok(Vec::new());
+        }
+        notification_candidates(&mut inner, ticket, can_deliver, providers::now())
+    }
+
+    pub fn notification_ticket_current(&self, ticket: &NotificationTicket) -> bool {
+        self.inner.lock().is_ok_and(|inner| {
+            !self.quitting.load(Ordering::Relaxed)
+                && notification_ticket_current(&inner, ticket, providers::now())
+        })
+    }
+
     fn save_change(
         &self,
         change: impl FnOnce(&Settings) -> Result<Settings, SettingsError>,
@@ -177,8 +232,14 @@ fn save_settings_change(
 ) -> Result<AppState, String> {
     let settings = change(&inner.view.settings).map_err(|error| error.to_string())?;
     persist(&settings).map_err(|error| error.to_string())?;
+    if settings.notifications_enabled != inner.view.settings.notifications_enabled
+        || settings.threshold != inner.view.settings.threshold
+    {
+        reset_notification_baselines(inner);
+    }
     for (index, provider) in PROVIDERS.into_iter().enumerate() {
         if inner.view.settings.providers.includes(provider) != settings.providers.includes(provider)
+            || (!should_poll(&inner.view.settings, provider) && should_poll(&settings, provider))
         {
             inner.schedules[index].next_due = 0;
         } else if settings.refresh_seconds != inner.view.settings.refresh_seconds {
@@ -190,6 +251,116 @@ fn save_settings_change(
     inner.view.settings = settings;
     inner.view.settings_error = None;
     Ok(inner.snapshot())
+}
+
+fn reset_notification_baselines(inner: &mut Inner) {
+    inner.notification_generation = inner.notification_generation.wrapping_add(1);
+    for provider in PROVIDERS {
+        inner.notifications.reset_baseline(provider);
+    }
+}
+
+fn save_notifications_enabled(
+    inner: &mut Inner,
+    enabled: bool,
+    now: i64,
+    persist: impl FnOnce(&Settings) -> Result<(), SettingsError>,
+) -> Result<AppState, String> {
+    let already_enabled = inner.view.settings.notifications_enabled;
+    let view = save_settings_change(
+        inner,
+        |current| {
+            let mut settings = current.clone();
+            settings.notifications_enabled = enabled;
+            Ok(settings)
+        },
+        now,
+        persist,
+    )?;
+    // An explicit restore may follow a permission change that polling never observed.
+    if enabled && already_enabled {
+        reset_notification_baselines(inner);
+    }
+    Ok(view)
+}
+
+fn update_notification_permission(inner: &mut Inner, can_deliver: bool) -> Result<(), String> {
+    if inner
+        .notification_permission
+        .is_some_and(|previous| previous != can_deliver)
+    {
+        reset_notification_baselines(inner);
+    }
+    inner.notification_permission = Some(can_deliver);
+    inner
+        .notifications
+        .set_policy(
+            inner.view.settings.notifications_enabled && can_deliver,
+            inner.view.settings.threshold,
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn notification_ticket(
+    inner: &Inner,
+    accepted: Option<&ProviderSnapshot>,
+) -> Option<NotificationTicket> {
+    let snapshot = accepted?;
+    if !inner.view.settings.notifications_enabled {
+        return None;
+    }
+    Some(NotificationTicket {
+        snapshot: snapshot.clone(),
+        connection_generation: inner.schedules[provider_index(snapshot.provider)].generation,
+        policy_generation: inner.notification_generation,
+    })
+}
+
+fn notification_max_age(inner: &Inner, provider: ProviderId) -> u64 {
+    inner.schedules[provider_index(provider)]
+        .cadence
+        .max(inner.view.settings.refresh_seconds as i64)
+        .saturating_add(30) as u64
+}
+
+fn notification_ticket_current(inner: &Inner, ticket: &NotificationTicket, now: i64) -> bool {
+    let provider = ticket.snapshot.provider;
+    let index = provider_index(provider);
+    inner.view.settings.notifications_enabled
+        && inner.view.settings.is_enabled(provider)
+        && !inner.view.paused
+        && inner.notification_generation == ticket.policy_generation
+        && inner.schedules[index].generation == ticket.connection_generation
+        && ticket.snapshot.fetched_at <= now
+        && now.abs_diff(ticket.snapshot.fetched_at) <= notification_max_age(inner, provider)
+        && inner.view.providers.get(index).is_some_and(|state| {
+            state.id == provider
+                && state.error.is_none()
+                && state.recovery.is_none()
+                && state.snapshot.as_ref() == Some(&ticket.snapshot)
+        })
+}
+
+fn notification_candidates(
+    inner: &mut Inner,
+    ticket: &NotificationTicket,
+    can_deliver: bool,
+    now: i64,
+) -> Result<Vec<LowAllowance>, String> {
+    let current = notification_ticket_current(inner, ticket, now);
+    update_notification_permission(inner, can_deliver)?;
+    if !current {
+        return Ok(Vec::new());
+    }
+    // A permission transition invalidates queued tickets, but this accepted reading can
+    // establish the new silent baseline while permission and evaluation share this lock.
+    let max_age = notification_max_age(inner, ticket.snapshot.provider);
+    Ok(inner.notifications.observe(
+        &ticket.snapshot,
+        ticket.snapshot.history_account.as_deref(),
+        now,
+        max_age,
+    ))
 }
 
 pub fn history_state(app: &AppHandle) -> Result<HistoryState, String> {
@@ -445,6 +616,7 @@ pub fn set_provider_enabled(
 fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
     let state = &mut inner.view.providers[index];
     let schedule = &mut inner.schedules[index];
+    inner.notifications.reset_baseline(state.id);
     inner.view.settings.set_enabled(state.id, enabled);
     schedule.generation = schedule.generation.wrapping_add(1);
     state.snapshot = None;
@@ -521,6 +693,8 @@ fn begin_recovery(
     {
         return Err("Wait a few seconds before trying to reconnect again.".to_owned());
     }
+    inner.notifications.reset_baseline(state.id);
+    schedule.generation = schedule.generation.wrapping_add(1);
     schedule.last_recovery_started = Some(now);
     schedule.recovery_cancel = Some(cancel);
     state.recovery = Some(match action {
@@ -747,21 +921,26 @@ fn finish_recovery(
     issue: Option<Issue>,
 ) {
     let runtime = app.state::<Runtime>();
-    let accepted = {
+    let (accepted, ticket) = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
-        complete_recovery(
+        let accepted = complete_recovery(
             &mut inner,
             index,
             cancel.load(Ordering::Relaxed),
             result,
             issue,
             providers::now(),
-        )
+        );
+        let ticket = notification_ticket(&inner, accepted.as_ref());
+        (accepted, ticket)
     };
     publish(app);
     record_history(app, accepted);
+    if let Some(ticket) = ticket {
+        crate::notification_delivery::observe(app, ticket);
+    }
     runtime.wake.notify_one();
 }
 
@@ -893,7 +1072,9 @@ fn interval(settings: &Settings, idle_seconds: Option<f64>) -> i64 {
 
 fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
     settings.is_enabled(provider)
-        && (settings.providers.includes(provider) || settings.history_recording)
+        && (settings.providers.includes(provider)
+            || settings.history_recording
+            || settings.notifications_enabled)
 }
 
 fn tick(app: &AppHandle, activity: Activity, now: i64) {
@@ -991,12 +1172,18 @@ async fn fetch_provider(
     runtime: &Runtime,
 ) -> Result<ProviderSnapshot, ProviderError> {
     let generation = runtime.history.ticket();
+    // Account identity also supports in-memory notification deduplication when history is off.
+    let needs_identity = generation.is_some()
+        || runtime
+            .inner
+            .lock()
+            .is_ok_and(|inner| inner.view.settings.notifications_enabled);
     let client = &runtime.client;
     let mut snapshot = match provider {
         ProviderId::Claude => {
             ClaudeProvider {
                 client,
-                history: generation.map(|_| &runtime.identity),
+                identity: needs_identity.then_some(&runtime.identity),
             }
             .fetch()
             .await
@@ -1043,15 +1230,20 @@ fn finish(
     result: Result<ProviderSnapshot, ProviderError>,
 ) {
     let runtime = app.state::<Runtime>();
-    let accepted = {
+    let (accepted, ticket) = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
         let now = providers::now();
-        finish_poll(&mut inner, index, generation, now, result)
+        let accepted = finish_poll(&mut inner, index, generation, now, result);
+        let ticket = notification_ticket(&inner, accepted.as_ref());
+        (accepted, ticket)
     };
     publish(app);
     record_history(app, accepted);
+    if let Some(ticket) = ticket {
+        crate::notification_delivery::observe(app, ticket);
+    }
 }
 
 fn finish_poll(
@@ -1299,6 +1491,379 @@ mod tests {
     }
 
     #[test]
+    fn notifications_monitor_hidden_connected_providers_without_recording_history() {
+        let mut settings = Settings {
+            providers: ProviderSelection::Claude,
+            notifications_enabled: true,
+            ..Settings::default()
+        };
+        assert!(!settings.history_recording);
+        assert!(should_poll(&settings, ProviderId::Codex));
+        settings.codex_enabled = false;
+        assert!(!should_poll(&settings, ProviderId::Codex));
+        settings.codex_enabled = true;
+        settings.notifications_enabled = false;
+        assert!(!should_poll(&settings, ProviderId::Codex));
+    }
+
+    #[test]
+    fn enabling_notifications_schedules_hidden_connections_without_resetting_service_waits() {
+        let mut state = inner();
+        state.view.settings.providers = ProviderSelection::Claude;
+        state.schedules[0].next_due = 160;
+        state.schedules[1].next_due = 600;
+        state.schedules[1].blocked_until = 900;
+        save_notification_choice(&mut state, true);
+        assert_eq!(state.schedules[0].next_due, 160);
+        assert_eq!(state.schedules[1].next_due, 0);
+        assert_eq!(state.schedules[1].blocked_until, 900);
+        assert!(!state.view.settings.history_recording);
+    }
+
+    fn notification_state() -> Inner {
+        let mut state = inner();
+        state.view.settings.notifications_enabled = true;
+        state
+    }
+
+    fn notification_reading(at: i64, used: f64) -> ProviderSnapshot {
+        let mut snapshot = inner().view.providers[0].snapshot.take().unwrap();
+        snapshot.fetched_at = at;
+        snapshot.limits[0].used_fraction = Some(used);
+        snapshot.limits[0].resets_at = Some(1_000);
+        snapshot.history_account = Some("a".repeat(64));
+        snapshot
+    }
+
+    fn accept_notification_reading(state: &mut Inner, at: i64, used: f64) -> NotificationTicket {
+        let generation = state.schedules[0].generation;
+        state.schedules[0].poll_generation = Some(generation);
+        let accepted = finish_poll(state, 0, generation, at, Ok(notification_reading(at, used)));
+        notification_ticket(state, accepted.as_ref()).unwrap()
+    }
+
+    fn save_notification_choice(state: &mut Inner, enabled: bool) {
+        save_notifications_enabled(state, enabled, 100, |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn notification_handoff_excludes_disabled_failed_and_cancelled_readings() {
+        let mut state = inner();
+        assert!(notification_ticket(&state, state.view.providers[0].snapshot.as_ref()).is_none());
+        state.view.settings.notifications_enabled = true;
+        state.schedules[0].poll_generation = Some(0);
+        let failed = finish_poll(&mut state, 0, 0, 100, Err(ProviderError::Network));
+        assert!(notification_ticket(&state, failed.as_ref()).is_none());
+        let cancelled = complete_recovery(
+            &mut state,
+            0,
+            true,
+            Some(Ok(notification_reading(101, 0.5))),
+            None,
+            101,
+        );
+        assert!(notification_ticket(&state, cancelled.as_ref()).is_none());
+        let accepted = complete_recovery(
+            &mut state,
+            0,
+            false,
+            Some(Ok(notification_reading(102, 0.5))),
+            None,
+            102,
+        );
+        let ticket = notification_ticket(&state, accepted.as_ref()).unwrap();
+        assert!(notification_ticket_current(&state, &ticket, 102));
+        assert!(ticket.snapshot.history_generation.is_none());
+    }
+
+    #[test]
+    fn history_free_notification_readings_are_silent_first_then_cross_once() {
+        let mut state = notification_state();
+        let first_low = accept_notification_reading(&mut state, 100, 0.9);
+        assert!(
+            notification_candidates(&mut state, &first_low, true, 100)
+                .unwrap()
+                .is_empty()
+        );
+        let high = accept_notification_reading(&mut state, 101, 0.5);
+        assert!(
+            notification_candidates(&mut state, &high, true, 101)
+                .unwrap()
+                .is_empty()
+        );
+        let low = accept_notification_reading(&mut state, 102, 0.9);
+        assert!(!state.view.settings.history_recording);
+        assert!(low.snapshot.history_generation.is_none());
+        assert_eq!(
+            notification_candidates(&mut state, &low, true, 102)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            notification_candidates(&mut state, &low, true, 102)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!notification_ticket_current(&state, &high, 102));
+    }
+
+    #[test]
+    fn notification_permission_changes_rebaseline_without_rearming_an_emitted_period() {
+        let mut state = notification_state();
+        for (at, used, permission, count) in [
+            (100, 0.5, true, 0),
+            (101, 0.9, false, 0),
+            (102, 0.9, true, 0),
+            (103, 0.5, true, 0),
+            (104, 0.9, true, 1),
+            (105, 0.5, false, 0),
+            (106, 0.5, true, 0),
+            (107, 0.9, true, 0),
+        ] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert_eq!(
+                notification_candidates(&mut state, &ticket, permission, at)
+                    .unwrap()
+                    .len(),
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn permission_reads_without_polls_invalidate_old_work_only_when_availability_changes() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let queued = accept_notification_reading(&mut state, 101, 0.9);
+        update_notification_permission(&mut state, true).unwrap();
+        update_notification_permission(&mut state, true).unwrap();
+        assert!(notification_ticket_current(&state, &queued, 101));
+        update_notification_permission(&mut state, false).unwrap();
+        let generation = state.notification_generation;
+        update_notification_permission(&mut state, false).unwrap();
+        assert_eq!(state.notification_generation, generation);
+        update_notification_permission(&mut state, true).unwrap();
+        assert!(!notification_ticket_current(&state, &queued, 101));
+        for (at, used, count) in [(102, 0.9, 0), (103, 0.5, 0), (104, 0.9, 1)] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert_eq!(
+                notification_candidates(&mut state, &ticket, true, at)
+                    .unwrap()
+                    .len(),
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn explicitly_enabling_an_enabled_preference_requires_a_fresh_notification_baseline() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let queued = accept_notification_reading(&mut state, 101, 0.9);
+        assert!(
+            save_notifications_enabled(&mut state, true, 101, |_| Err(SettingsError::Threshold))
+                .is_err()
+        );
+        assert!(notification_ticket_current(&state, &queued, 101));
+        save_notification_choice(&mut state, true);
+        assert!(!notification_ticket_current(&state, &queued, 101));
+        for (at, used, count) in [(102, 0.9, 0), (103, 0.5, 0), (104, 0.9, 1)] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert_eq!(
+                notification_candidates(&mut state, &ticket, true, at)
+                    .unwrap()
+                    .len(),
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn consumed_notification_crossings_are_not_replayed_after_delivery_failure() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let low = accept_notification_reading(&mut state, 101, 0.9);
+        let consumed = notification_candidates(&mut state, &low, true, 101).unwrap();
+        assert_eq!(consumed.len(), 1);
+        // Delivery happens outside the runtime. Dropping failed submissions cannot rearm them.
+        drop(consumed);
+        assert!(
+            notification_candidates(&mut state, &low, true, 101)
+                .unwrap()
+                .is_empty()
+        );
+        for (at, used) in [(102, 0.9), (103, 0.5), (104, 0.9)] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert!(
+                notification_candidates(&mut state, &ticket, true, at)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn notification_policy_changes_invalidate_queued_work_and_preserve_deduplication() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let queued = accept_notification_reading(&mut state, 101, 0.9);
+        save_notification_choice(&mut state, false);
+        save_notification_choice(&mut state, true);
+        assert!(!notification_ticket_current(&state, &queued, 101));
+        for (at, used, count) in [(102, 0.9, 0), (103, 0.5, 0), (104, 0.9, 1)] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert_eq!(
+                notification_candidates(&mut state, &ticket, true, at)
+                    .unwrap()
+                    .len(),
+                count
+            );
+        }
+        let queued = accept_notification_reading(&mut state, 105, 0.5);
+        save_settings_change(
+            &mut state,
+            |current| {
+                let mut settings = current.clone();
+                settings.threshold = 15;
+                Ok(settings)
+            },
+            105,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(!notification_ticket_current(&state, &queued, 105));
+        for (at, used) in [(106, 0.5), (107, 0.9)] {
+            let ticket = accept_notification_reading(&mut state, at, used);
+            assert!(
+                notification_candidates(&mut state, &ticket, true, at)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_or_failed_settings_saves_do_not_invalidate_notification_tickets() {
+        let mut state = notification_state();
+        let ticket = accept_notification_reading(&mut state, 100, 0.5);
+        save_settings_change(
+            &mut state,
+            |current| {
+                let mut settings = current.clone();
+                settings.providers = ProviderSelection::Codex;
+                settings.theme = settings::Theme::Dark;
+                settings.percentage_mode = PercentageMode::Used;
+                settings.history_recording = true;
+                Ok(settings)
+            },
+            100,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(notification_ticket_current(&state, &ticket, 100));
+        assert!(
+            save_settings_change(
+                &mut state,
+                |current| {
+                    let mut settings = current.clone();
+                    settings.notifications_enabled = false;
+                    Ok(settings)
+                },
+                100,
+                |_| Err(SettingsError::Threshold)
+            )
+            .is_err()
+        );
+        assert!(notification_ticket_current(&state, &ticket, 100));
+    }
+
+    #[test]
+    fn connection_and_recovery_invalidate_notification_tickets_and_rebaseline() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let queued = accept_notification_reading(&mut state, 101, 0.9);
+        change_connection(&mut state, 0, false, 101);
+        change_connection(&mut state, 0, true, 101);
+        assert!(!notification_ticket_current(&state, &queued, 101));
+        let low = accept_notification_reading(&mut state, 102, 0.9);
+        assert!(
+            notification_candidates(&mut state, &low, true, 102)
+                .unwrap()
+                .is_empty()
+        );
+        let high = accept_notification_reading(&mut state, 103, 0.5);
+        notification_candidates(&mut state, &high, true, 103).unwrap();
+        begin_recovery(
+            &mut state,
+            0,
+            platform::auth::Action::SignIn,
+            Arc::new(AtomicBool::new(false)),
+            104,
+        )
+        .unwrap();
+        assert!(!notification_ticket_current(&state, &high, 104));
+        let accepted = complete_recovery(
+            &mut state,
+            0,
+            false,
+            Some(Ok(notification_reading(105, 0.9))),
+            None,
+            105,
+        );
+        let recovered = notification_ticket(&state, accepted.as_ref()).unwrap();
+        assert!(
+            notification_candidates(&mut state, &recovered, true, 105)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn notification_ticket_checks_current_state_and_the_polling_freshness_allowance() {
+        let mut state = notification_state();
+        let ticket = accept_notification_reading(&mut state, 100, 0.5);
+        assert!(!notification_ticket_current(&state, &ticket, 99));
+        assert!(notification_ticket_current(&state, &ticket, 190));
+        assert!(!notification_ticket_current(&state, &ticket, 191));
+        state.schedules[0].cadence = 600;
+        assert!(notification_ticket_current(&state, &ticket, 730));
+        assert!(!notification_ticket_current(&state, &ticket, 731));
+        state.view.paused = true;
+        assert!(!notification_ticket_current(&state, &ticket, 100));
+        state.view.paused = false;
+        state.view.providers[0].error = Some(ProviderError::Network.issue());
+        assert!(!notification_ticket_current(&state, &ticket, 100));
+        state.view.providers[0].error = None;
+        state.view.providers[0].recovery = Some(RecoveryStage::Checking);
+        assert!(!notification_ticket_current(&state, &ticket, 100));
+    }
+
+    #[test]
+    fn an_expired_sibling_quota_does_not_hide_a_fresh_notification_crossing() {
+        let mut state = notification_state();
+        let high = accept_notification_reading(&mut state, 100, 0.5);
+        notification_candidates(&mut state, &high, true, 100).unwrap();
+        let mut reading = notification_reading(101, 0.9);
+        let mut expired = reading.limits[0].clone();
+        expired.id = "weekly".into();
+        expired.resets_at = Some(100);
+        reading.limits.push(expired);
+        state.schedules[0].poll_generation = Some(0);
+        let accepted = finish_poll(&mut state, 0, 0, 101, Ok(reading));
+        let ticket = notification_ticket(&state, accepted.as_ref()).unwrap();
+        assert!(state.view.providers[0].stale);
+        let candidates = notification_candidates(&mut state, &ticket, true, 101).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].limit_id, "session");
+    }
+
+    #[test]
     fn interleaved_display_and_provider_changes_preserve_each_others_fields() {
         for display_first in [true, false] {
             let mut state = inner();
@@ -1524,6 +2089,9 @@ mod tests {
                 paused: false,
             },
             schedules: Default::default(),
+            notifications: Evaluator::default(),
+            notification_generation: 0,
+            notification_permission: None,
         }
     }
 

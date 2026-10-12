@@ -173,7 +173,7 @@ Routine usage checks contact these endpoints:
 - [Anthropic usage](https://api.anthropic.com/api/oauth/usage)
 - [OpenAI usage](https://chatgpt.com/backend-api/wham/usage)
 
-With history recording enabled, Delta-V also uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs.
+With history recording or low-allowance notifications enabled, Delta-V also uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs. Notifications do not enable history recording.
 
 Each provider receives its own saved access token with the request. OpenAI also receives the selected account ID. Credentials stay in the Rust backend and are never passed to the usage panel. Delta-V does not read browser cookies or write credentials.
 
