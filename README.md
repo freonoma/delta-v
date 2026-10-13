@@ -114,7 +114,9 @@ Usage updates automatically. **Check now** requests the latest reading; it canno
 
 Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low-budget threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
 
-The threshold comes from **Display & usage → Low budget threshold** and always refers to remaining allowance. Save a threshold change before it affects alerts. A threshold of 0 prevents low-allowance alerts. The first valid reading after enabling, restarting, changing accounts or restoring permission stays quiet, even if already low. Later readings must cross the threshold. Each quota can alert once per reset period during that app run; failed or stale checks do not trigger alerts.
+The threshold comes from **Display & usage → Low budget threshold** and always refers to remaining allowance. Save a threshold change before it affects alerts. A threshold of 0 prevents low-allowance alerts.
+
+The first valid reading stays quiet, even if already low. This applies after enabling, restarting, changing accounts, saving a different threshold or restoring permission, and at the start of each new quota period. Later readings must cross the threshold. Each quota can alert once per reset period during that app run; failed or stale checks do not trigger alerts.
 
 **Send test notification** asks macOS to show an example without changing your usage. A successful request means macOS accepted it; Focus and system notification settings can still hide the banner. If permission is blocked, choose **Open macOS notification settings**, then allow Delta-V under **System Settings → Notifications**. Delta-V reads permission again when you return. Notification controls apply immediately, and turning them off remains available if a permission check fails.
 
@@ -269,6 +271,8 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 - [ ] Add a Homebrew cask for installation and updates.
 - [x] Offer Launch at login during setup and in Settings.
 - [x] Keep quota history on your Mac, with charts and PNG/CSV exports.
+- [x] Organize settings in a dedicated window.
+- [x] Offer optional low-allowance notifications.
 
 Under consideration: API usage and spending in a separate view. API billing would need its own data sources and account setup, and would stay separate from subscription allowances.
 

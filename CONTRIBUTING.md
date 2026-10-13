@@ -84,6 +84,14 @@ In the browser preview, use `?view=settings&section=notifications&notifications=
 
 Ordinary `tauri dev` executables report notifications as unavailable because they lack an app bundle identity. Native smoke tests need a built `Delta-V.app`. Check first enable, denied permission, permission changes in System Settings, test delivery, foreground presentation and clicking an alert while Settings has unsaved changes. The System Settings link is best effort; the manual route is **System Settings > Notifications > Delta-V**. Automated tests use synthetic readings and permission values, without requesting permission or sending real notifications.
 
+Build a local debug app for these checks:
+
+```sh
+APPLE_SIGNING_IDENTITY=- npm run tauri -- build --debug --bundles app -- --locked
+```
+
+Quit any running copy, then open `src-tauri/target/debug/bundle/macos/Delta-V.app`. This ad-hoc signed app uses your normal Delta-V settings and saved CLI sign-ins. It is not notarized.
+
 ## Checking your work
 
 For code changes, run these from the project root:
@@ -125,7 +133,7 @@ For maintainers, the release order is:
 1. Run the checks above and confirm that `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version. Match the top-level and root-package versions in `package-lock.json` and the `delta-v` package version in `src-tauri/Cargo.lock` too; dependency and test-fixture versions are separate. Prepare any README changes and draft the release description for GitHub, then commit the changes intended for release.
 2. Build for the intended architecture. The first download targets Apple silicon (`aarch64-apple-darwin`). Sign the app and DMG with a **Developer ID Application** certificate, then submit the DMG to Apple for notarization. Follow the [Tauri signing guide](https://v2.tauri.app/distribute/sign/macos/) for signing setup. Keep signing credentials outside the repository.
 3. Check Apple's notarization log, staple the accepted ticket to the DMG, and verify the signatures and Gatekeeper acceptance of both the DMG and its enclosed app. Generate the `.dmg.sha256` checksum after stapling, since stapling changes the file.
-4. Install from that DMG and check normal launch, account connections, saved settings, and launch at login after logging out and back in. Check replacing an older app too. A separate Mac or macOS account helps test a fresh setup. If application code changes, rebuild and repeat signing and verification.
+4. Install from that DMG and check normal launch, account connections, saved settings, and launch at login after logging out and back in. Check replacing an older app too. Verify Settings returns to the panel and protects unsaved changes, then repeat the native notification checks above with the release app. A separate Mac or macOS account helps test a fresh setup. If application code changes, rebuild and repeat signing and verification.
 5. Push the release changes and create a draft GitHub release with a matching tag, such as `v0.1.0`. The tag must contain the application source used for the build. Attach the DMG and checksum under **Attach binaries**, then add release notes with installation steps, supported Macs, and known limitations. Keep build files out of source commits.
 6. Download the attached DMG and checksum through a browser, verify the checksum, and test installation from that downloaded copy. Publish the draft after these checks pass, then mark the downloadable release complete in the README roadmap.
 
