@@ -7,7 +7,7 @@ import {
 function settings(changes = {}) {
   return {
     providers: "both", claude_enabled: true, codex_enabled: true,
-    launch_at_login_prompt_dismissed: false, history_recording: false, history_retention: "forever",
+    launch_at_login_prompt_dismissed: false, history_recording: false, history_retention: "forever", notifications_enabled: false,
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
     theme: "system", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
     ...changes,
@@ -94,12 +94,13 @@ test("validation normalizes tracking against the latest provider selection", () 
 test("provider normalization adopts untouched tracking without resetting an unsaved theme", () => {
   const baseline = createSettingsDraft(settings(), "columns");
   const draft = { ...baseline, preferences: { ...baseline.preferences, theme: "dark" } };
-  const next = createSettingsDraft(settings({ providers: "claude", tracked_limit: "auto", history_recording: true }), "columns");
+  const next = createSettingsDraft(settings({ providers: "claude", tracked_limit: "auto", history_recording: true, notifications_enabled: true }), "columns");
   const reconciled = reconcileSettingsDraft(draft, baseline, next);
   assert.deepEqual(reconciled, { ...next, preferences: { ...next.preferences, theme: "dark" } });
   assert.equal(isSettingsDraftDirty(reconciled, next), true);
   assert.equal("providers" in reconciled.preferences, false);
   assert.equal("history_recording" in reconciled.preferences, false);
+  assert.equal("notifications_enabled" in reconciled.preferences, false);
 });
 
 test("reconciliation adopts each clean field independently and preserves edited fields", () => {

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { native, preview } from "./ui-state";
 
-export const settingsSections = ["display", "accounts", "history", "app"] as const;
+export const settingsSections = ["display", "accounts", "history", "notifications", "app"] as const;
 export type SettingsSection = typeof settingsSections[number];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {

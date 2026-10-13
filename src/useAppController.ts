@@ -61,6 +61,13 @@ export function useAppController() {
     });
   }, []);
 
+  const updateNotificationPreference = useCallback((enabled: boolean) => {
+    if (!preview) return;
+    setState((current) => current ? {
+      ...current, settings: { ...current.settings, notifications_enabled: enabled },
+    } : current);
+  }, []);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     const recoveryTimers = previewTimers.current;
@@ -308,6 +315,6 @@ export function useAppController() {
     panelPreferences, panelReady, panelBusy, panelCommandPending,
     saving, pendingRecovery, pendingConnection,
     saveDisplayPreferences, selectProviders, savePanelPreferences, changePanelPreferences,
-    updateHistoryPreferences, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
+    updateHistoryPreferences, updateNotificationPreference, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
   };
 }

@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AccountsSettings } from "./AccountControls";
 import { DisplaySettings } from "./DisplaySettings";
 import { HistorySettings } from "./HistorySettings";
+import { Notifications, useNotifications } from "./Notifications";
 import { Startup } from "./Startup";
 import { Updates } from "./Updates";
 import { BrandMark } from "./BrandMark";
@@ -19,12 +20,13 @@ import type { AppState, PanelPreferences, Theme } from "./types";
 import { errorMessage, native, preview } from "./ui-state";
 
 const sectionTitles: Record<SettingsSection, string> = {
-  display: "Display & usage", accounts: "Accounts", history: "History", app: "App",
+  display: "Display & usage", accounts: "Accounts", history: "History", notifications: "Notifications", app: "App",
 };
 const sectionDescriptions: Record<SettingsSection, string> = {
   display: "Choose usage windows, percentages and appearance.",
   accounts: "Manage the accounts Delta-V checks for usage.",
   history: "Manage the readings saved on this Mac.",
+  notifications: "Choose whether Delta-V alerts you when allowance runs low.",
   app: "Launch at login and check for updates.",
 };
 type CloseIntent = "close" | "back" | "quit";
@@ -48,7 +50,7 @@ function UnsavedChanges({ intent, busy, onKeepEditing, onDiscard, onSave }: {
       onCancel={(event) => { event.preventDefault(); if (!busy) onKeepEditing(); }}
       onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }}>
       <h3 id="unsaved-title">Save changes before {intent === "quit" ? "quitting" : intent === "back" ? "returning to the panel" : "closing"}?</h3>
-      <p id="unsaved-description">Your display changes have not been saved. Account, history and launch-at-login changes already apply.</p>
+      <p id="unsaved-description">Your display changes have not been saved. Account, history, notification and launch-at-login changes already apply.</p>
       <div className="settings-dialog-actions">
         <button className="text-button" autoFocus disabled={busy} onClick={onKeepEditing}>Keep editing</button>
         <button className="text-button" disabled={busy} onClick={onDiscard}>Discard changes</button>
@@ -71,6 +73,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
   const { now, login, updates, saving, panelBusy, pendingRecovery, pendingConnection,
     saveDisplayPreferences, savePanelPreferences, updateHistoryPreferences, setProviderEnabled,
     reconnect, cancelReconnect } = controller;
+  const notifications = useNotifications(state.settings.notifications_enabled, controller.updateNotificationPreference);
   const [form, setForm] = useState(() => {
     const baseline = createSettingsDraft(state.settings, panelPreferences.layout);
     return { baseline, draft: baseline };
@@ -82,7 +85,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
   const operation = useRef(false);
   const pendingClose = useRef<CloseIntent | null>(null);
   const content = useRef<HTMLDivElement>(null);
-  const busy = submitting || saving || panelBusy;
+  const busy = submitting || saving || panelBusy || notifications.pending;
   const dirty = isSettingsDraftDirty(form.draft, form.baseline);
 
   // Polling and other windows can change saved values while this draft is open.
@@ -189,6 +192,14 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
         <section role="tabpanel" id="settings-panel-history" aria-labelledby="settings-tab-history" hidden={section !== "history"}>
           {section === "history" && <HistorySettings settings={state.settings} onChange={updateHistoryPreferences} />}
         </section>
+        <section role="tabpanel" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications" hidden={section !== "notifications"}>
+          <Notifications notifications={notifications} savedThreshold={state.settings.threshold}
+            thresholdChanged={form.draft.threshold.trim() === "" || Number(form.draft.threshold) !== state.settings.threshold}
+            onEditThreshold={() => {
+              setSection("display");
+              window.requestAnimationFrame(() => content.current?.querySelector<HTMLInputElement>('input[name="threshold"]')?.focus());
+            }} />
+        </section>
         <section role="tabpanel" id="settings-panel-app" aria-labelledby="settings-tab-app" hidden={section !== "app"}>
           {section === "app" && <>
             <Startup login={login} mode="settings" dismissed={state.settings.launch_at_login_prompt_dismissed} />
@@ -197,7 +208,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
         </section>
       </div>
       <footer className="settings-window-footer">
-        <p className="settings-save-status" role={validation ? "alert" : "status"}>{validation ?? (busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
+        <p className="settings-save-status" role={validation ? "alert" : "status"}>{validation ?? (notifications.pending ? "Updating notifications…" : busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
         <div className="settings-footer-actions">
           <button className="text-button" disabled={busy || !dirty} onClick={discard}>Discard changes</button>
           <button className="primary-button" disabled={busy || !dirty} onClick={() => void save()}>Save changes</button>

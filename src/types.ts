@@ -127,6 +127,19 @@ export interface LoginItemState {
   reason: string | null;
 }
 
+export interface NotificationPermission {
+  authorization: "not_determined" | "denied" | "authorized" | "provisional" | "unknown";
+  alerts_enabled: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface NotificationStatus {
+  enabled: boolean;
+  permission: NotificationPermission | null;
+  error: string | null;
+}
+
 export type DisplayPreferences = Pick<Settings,
   "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "percentage_mode"
   | "claude_windows" | "codex_windows">;

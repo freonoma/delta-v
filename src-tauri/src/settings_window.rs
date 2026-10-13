@@ -159,6 +159,7 @@ pub enum SettingsSection {
     Display,
     Accounts,
     History,
+    Notifications,
     App,
 }
 
@@ -168,6 +169,7 @@ impl SettingsSection {
             Self::Display => "Display & usage - Delta-V Settings",
             Self::Accounts => "Accounts - Delta-V Settings",
             Self::History => "History - Delta-V Settings",
+            Self::Notifications => "Notifications - Delta-V Settings",
             Self::App => "App - Delta-V Settings",
         }
     }
@@ -177,6 +179,7 @@ impl SettingsSection {
             Self::Display => "display",
             Self::Accounts => "accounts",
             Self::History => "history",
+            Self::Notifications => "notifications",
             Self::App => "app",
         };
         format!("index.html?view=settings&section={section}")
@@ -354,6 +357,7 @@ mod tests {
             ("display", SettingsSection::Display),
             ("accounts", SettingsSection::Accounts),
             ("history", SettingsSection::History),
+            ("notifications", SettingsSection::Notifications),
             ("app", SettingsSection::App),
         ] {
             assert_eq!(

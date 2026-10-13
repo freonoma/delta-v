@@ -7,7 +7,7 @@ import {
 
 const settings = {
   providers: "both", claude_enabled: true, codex_enabled: true,
-  launch_at_login_prompt_dismissed: false, history_recording: false,
+  launch_at_login_prompt_dismissed: false, history_recording: false, notifications_enabled: false,
   history_retention: "forever", tracked_limit: "codex:weekly", threshold: 20,
   refresh_seconds: 60, theme: "system", percentage_mode: "remaining",
   claude_windows: [], codex_windows: [],
@@ -28,7 +28,7 @@ test("display and provider changes preserve immediate preferences in either save
   const draft = displayPreferences({ ...settings, theme: "dark", threshold: 15 });
   const current = {
     ...settings, claude_enabled: false, codex_enabled: false,
-    launch_at_login_prompt_dismissed: true, history_recording: true, history_retention: "days30",
+    launch_at_login_prompt_dismissed: true, history_recording: true, history_retention: "days30", notifications_enabled: true,
   };
   const displayFirst = previewProviderSelection(previewDisplayPreferences(current, draft), "claude");
   const providerFirst = previewDisplayPreferences(previewProviderSelection(current, "claude"), draft);

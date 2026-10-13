@@ -280,6 +280,80 @@
   line-height: 1.5;
 }
 
+.notification-settings h3 {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notification-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+}
+
+.notification-setting-row > div {
+  min-width: 0;
+}
+
+.notification-setting-row p,
+.notification-caption,
+.notification-preview {
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.notification-status {
+  margin-top: 14px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.notification-status p + p {
+  margin-top: 6px;
+}
+
+.notification-notice {
+  color: var(--secondary);
+}
+
+.notification-error {
+  margin-top: 8px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 10px;
+}
+
+.notification-threshold {
+  margin: 18px 0 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.notification-threshold > .text-button {
+  margin: 6px 0 0 -10px;
+  text-align: left;
+}
+
+.notification-preview {
+  margin-top: 14px;
+}
+
 .settings-window-footer {
   display: flex;
   flex-shrink: 0;

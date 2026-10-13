@@ -84,11 +84,11 @@ Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses 
 
 Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes History or expanded details first, then hides the panel.
 
-Choose **Settings** in the panel, right-click ΔV and choose **Settings**, or press **Cmd+,** while Delta-V is active. The same Settings window comes forward each time. Its sidebar has **Display & usage**, **Accounts**, **History**, and **App** sections. Switching sections keeps unsaved display changes. Reopening Settings restores the last section until you quit Delta-V.
+Choose **Settings** in the panel, right-click ΔV and choose **Settings**, or press **Cmd+,** while Delta-V is active. The same Settings window comes forward each time. Its sidebar has **Display & usage**, **Accounts**, **History**, **Notifications**, and **App** sections. Switching sections keeps unsaved display changes. Reopening Settings restores the last section until you quit Delta-V.
 
 Opening Settings from the panel keeps your place. Closing it returns to the same usage or History view, including expanded details and scroll position. **Back to panel** also returns there. If you opened Settings from the menu while the panel was hidden, closing Settings leaves the panel hidden.
 
-Use **Save changes** to apply display preferences, or **Discard changes** to restore the saved values. Closing Settings with the red close button, **Cmd+W**, or Escape asks what to do if display changes are unsaved. Quitting Delta-V does too. Account, history and launch-at-login actions apply immediately and are not undone by discarding display changes.
+Use **Save changes** to apply display preferences, or **Discard changes** to restore the saved values. Closing Settings with the red close button, **Cmd+W**, or Escape asks what to do if display changes are unsaved. Quitting Delta-V does too. Account, history, notification and launch-at-login actions apply immediately and are not undone by discarding display changes.
 
 Delta-V remembers the pin, view and position when you quit. A pinned panel returns when the app launches, without taking keyboard focus. If its monitor is disconnected, it moves onto an available screen. Unpin it before quitting if you want Delta-V to start quietly in the menu bar.
 
@@ -109,6 +109,16 @@ The percentages and bar fill change colour when less than 20% remains. When show
 **Settings → App → Startup → Launch at login** opens Delta-V when you log in to your Mac. A saved pinned panel reappears; otherwise, the app starts quietly in the menu bar. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
 
 Usage updates automatically. **Check now** requests the latest reading; it cannot reset or replenish your allowance.
+
+### Low-allowance notifications
+
+Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low-budget threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
+
+The threshold comes from **Display & usage → Low budget threshold** and always refers to remaining allowance. Save a threshold change before it affects alerts. A threshold of 0 prevents low-allowance alerts. The first valid reading after enabling, restarting, changing accounts or restoring permission stays quiet, even if already low. Later readings must cross the threshold. Each quota can alert once per reset period during that app run; failed or stale checks do not trigger alerts.
+
+**Send test notification** asks macOS to show an example without changing your usage. A successful request means macOS accepted it; Focus and system notification settings can still hide the banner. If permission is blocked, choose **Open macOS notification settings**, then allow Delta-V under **System Settings → Notifications**. Delta-V reads permission again when you return. Notification controls apply immediately, and turning them off remains available if a permission check fails.
+
+Alerts have no sound and include the provider, usage-window names and remaining threshold. macOS controls where notification previews appear. Clicking an alert opens usage without discarding unsaved Settings changes. Ordinary development executables cannot send notifications; use a built `Delta-V.app` to check this feature.
 
 ### Local history
 
@@ -243,9 +253,10 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `claude_windows` | `[]` | Up to two Claude limit IDs for the compact rows, in display order; empty means Automatic |
 | `codex_windows` | `[]` | Up to two Codex limit IDs for the compact rows, in display order; empty means Automatic |
 | `percentage_mode` | `"remaining"` | `"remaining"` or `"used"`, for the menu bar, provider summaries, and usage bars |
-| `threshold` | `20` | Highlight when remaining usage falls below this percentage, from 0 to 100 |
+| `threshold` | `20` | Highlight below this remaining percentage, from 0 to 100; enabled notifications watch for crossings below it |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
+| `notifications_enabled` | `false` | Local low-allowance alerts for both connected providers; macOS alert permission is also required |
 | `history_recording` | `false` | Save new quota readings locally for both connected providers |
 | `history_retention` | `"forever"` | `"forever"`, `"days30"`, or `"days90"`; shorter retention also removes older saved readings |
 
