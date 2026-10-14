@@ -104,7 +104,7 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
         </select>
       </label>
       <label className="setting-row">
-        <span>Low budget threshold<small>Highlight when less than this percentage remains</small></span>
+        <span>Low allowance threshold<small>Remaining percentage used for highlighting and enabled alerts. Save changes to apply.</small></span>
         <span className="number-field">
           <input name="threshold" type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
           <span>%</span>

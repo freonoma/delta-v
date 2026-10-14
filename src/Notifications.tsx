@@ -178,9 +178,9 @@ export function Notifications({ notifications, savedThreshold, thresholdChanged,
         <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Check again</button>
       </div>
       <div className="notification-threshold">
-        <p>Notify below <strong>{savedThreshold}% remaining</strong>, using the saved threshold in Display &amp; usage.</p>
+        <p>When enabled, notify below <strong>{savedThreshold}% remaining</strong>, using the saved Low allowance threshold in Display &amp; usage.</p>
         {savedThreshold === 0 && <p className="notification-caption">At 0%, usage cannot cross below the threshold, so no low-allowance alerts will be sent. Choose a higher threshold to receive alerts.</p>}
-        {thresholdChanged && <p className="notification-caption">Your threshold change is not saved yet. Notifications still use {savedThreshold}%.</p>}
+        {thresholdChanged && <p className="notification-caption">Your threshold change is not saved yet. Highlighting and enabled alerts still use {savedThreshold}% remaining.</p>}
         <button type="button" className="text-button" onClick={onEditThreshold}>Edit threshold in Display &amp; usage</button>
       </div>
       <p className="notification-caption">The first reading stays quiet, even if already low. A later reading must cross below the threshold. While Delta-V stays open, each quota period can send one alert.</p>

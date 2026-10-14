@@ -102,7 +102,7 @@ Percentages show **remaining** usage by default. A window at 55% used has 45% re
 
 By default, the menu bar tracks the most-used available window among the selected providers. **Settings → Display & usage → Menu bar tracks** lets you choose a particular five-hour, weekly, or model-specific window instead. Each provider's large percentage shows its most-used window, unless you track a specific one from that provider.
 
-The percentages and bar fill change colour when less than 20% remains. When showing remaining usage, the bar is empty at 0%, so the warning colour appears on the numbers. You can change the threshold in Settings. It always refers to what remains, even when you choose to display the percentage used. The menu bar icon itself follows the normal macOS colour.
+The percentages and bar fill change colour when less than 20% remains. When showing remaining usage, the bar is empty at 0%, so the warning colour appears on the numbers. Change **Settings → Display & usage → Low allowance threshold**, then choose **Save changes** to apply it to highlighting and enabled low-allowance alerts. It always refers to what remains, even when you choose to display the percentage used. The menu bar icon itself follows the normal macOS colour.
 
 **Appearance**, under **Display & usage**, offers Light, Dark, or System, which follows your Mac's appearance. Changes preview in the Settings window. **Save changes** applies them to the usage panel too; **Discard changes** restores the saved appearance.
 
@@ -112,9 +112,9 @@ Usage updates automatically. **Check now** requests the latest reading; it canno
 
 ### Low-allowance notifications
 
-Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low-budget threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
+Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low allowance threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
 
-The threshold comes from **Display & usage → Low budget threshold** and always refers to remaining allowance. Save a threshold change before it affects alerts. A threshold of 0 prevents low-allowance alerts.
+The threshold comes from **Display & usage → Low allowance threshold** and always refers to remaining allowance. Highlighting and enabled alerts use the same saved threshold. Choose **Save changes** before a threshold change affects either. A threshold of 0 prevents low-allowance alerts.
 
 The first valid reading stays quiet, even if already low. This applies after enabling, restarting, changing accounts, saving a different threshold or restoring permission, and at the start of each new quota period. Later readings must cross the threshold. Each quota can alert once per reset period during that app run; failed or stale checks do not trigger alerts.
 
@@ -134,7 +134,7 @@ Open **History**, next to Settings, to browse **Today**, **7 days**, **30 days**
 
 Today shows individual readings. Longer periods show the closest recorded reading to the limit on each day, not the amount you used that day. Hover to inspect a day, or click it to see its readings. You can also use the arrow keys on a chart and press Enter to open a day. Blank periods have no saved readings; a reset time alone never fills in a new value. Dates follow your Mac's current time zone.
 
-The observations below each chart show the highest recorded usage (or lowest remaining allowance), days with a reading below your low-budget threshold, and days with any readings. They describe the saved samples, not tokens spent or productivity. **Reload** reads the local files again without contacting either provider. **Manage history** opens the recording and retention controls in Settings.
+The observations below each chart show the highest recorded usage (or lowest remaining allowance), days with a reading below your saved low allowance threshold, and days with any readings. They describe the saved samples, not tokens spent or productivity. **Reload** reads the local files again without contacting either provider. **Manage history** opens the recording and retention controls in Settings.
 
 Use **Export → Chart image** to preview the selected charts, then save a PNG or copy it to the clipboard. The image uses your current appearance and percentage preference, includes dates and a small Delta-V mark, and leaves out account keys.
 
@@ -255,7 +255,7 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `claude_windows` | `[]` | Up to two Claude limit IDs for the compact rows, in display order; empty means Automatic |
 | `codex_windows` | `[]` | Up to two Codex limit IDs for the compact rows, in display order; empty means Automatic |
 | `percentage_mode` | `"remaining"` | `"remaining"` or `"used"`, for the menu bar, provider summaries, and usage bars |
-| `threshold` | `20` | Highlight below this remaining percentage, from 0 to 100; enabled notifications watch for crossings below it |
+| `threshold` | `20` | Low allowance threshold, from 0 to 100% remaining; the saved value controls highlighting and enabled notifications watch for crossings below it |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
 | `notifications_enabled` | `false` | Local low-allowance alerts for both connected providers; macOS alert permission is also required |
