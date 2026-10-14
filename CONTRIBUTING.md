@@ -38,6 +38,8 @@ npm run dev
 
 Open `http://127.0.0.1:1420` in your browser. This preview uses sample data and keeps settings in memory. It does not read credentials or fetch usage. Native tray behaviour, Keychain access, and panel positioning still need to be checked in the macOS app.
 
+For connection help, use `?issue=credential_access&provider=both` or `?issue=configuration&provider=both`. Add `&view=settings&section=accounts` to check the same errors in Settings. Check the help links with Tab and Enter in both appearances and provider layouts. Browser preview uses ordinary links; check native browser opening, failure feedback and retry separately in the macOS app. Do not change real credentials to create an error state.
+
 For history work, open `http://127.0.0.1:1420/?history=ready`, then click **History**. Other `history` values are `empty`, `paused`, `waiting`, `sparse`, `error`, and `accounts`. These use synthetic readings, including gaps and an earlier account. Recording, retention, and clear controls affect only the in-memory preview; reloading the page restores the selected example.
 
 For update checks, open **Settings → App → Updates** in the browser preview. The default starts unchecked and **Check for updates** produces a sample result without contacting GitHub. Use `?updates=available` for a newer release; other values are `unchecked`, `current`, `ahead`, `network`, `rate_limited`, `invalid_response`, `service`, and `stale`. The `stale` example shows a failed check with an earlier successful result. Set `updates_result` to choose the result of a button click, for example `?updates=current&updates_result=network`. Preview results stay in memory. Check native browser opening and actual GitHub responses separately in the macOS app.

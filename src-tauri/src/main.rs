@@ -204,6 +204,15 @@ async fn open_setup_instructions(provider: model::ProviderId) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn open_connection_help(topic: platform::ConnectionHelpTopic) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        platform::open_connection_help(topic).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Could not open connection help in your browser. Please try again.".to_owned())?
+}
+
+#[tauri::command]
 async fn open_releases() -> Result<(), String> {
     tokio::task::spawn_blocking(|| platform::open_releases().map_err(|error| error.to_string()))
         .await
@@ -411,6 +420,7 @@ fn main() -> tauri::Result<()> {
             cancel_reconnect,
             set_provider_enabled,
             open_setup_instructions,
+            open_connection_help,
             open_releases,
             get_login_item_state,
             set_launch_at_login,

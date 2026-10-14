@@ -64,6 +64,10 @@ Click ΔV and select **Claude**, **Codex**, or **Both**. If you need to connect,
 
 If the required app is missing or needs an update, choose **Claude Code setup** or **Codex setup** in the provider's card. This opens the provider's instructions in your browser. After installing or updating, return to Delta-V and choose **Sign in with Claude Code** or **Sign in with Codex**. You do not need to restart Delta-V. These controls are also available under **Settings → Accounts**, even for a provider hidden by the picker.
 
+For file or Keychain access errors, **Credential access help** opens [Privacy](#privacy). Expand **Files and Keychain items Delta-V reads or writes** for credential locations and custom CLI directories. For configuration errors, **Connection setup help** opens this section. Both links are available in the provider's card and **Settings → Accounts**. If the browser cannot open, Delta-V shows an error beside the link so you can retry.
+
+Delta-V supports Codex's `cli_auth_credentials_store` values `file`, `keyring`, and `auto` in the CLI's `config.toml`. An absent setting uses `file`; `ephemeral` keeps the sign-in in memory and cannot be read by Delta-V. For an invalid or unsupported storage setting, correct it in Codex's configuration and use Codex to sign in again if needed, then choose **Check now**. Delta-V does not change the CLI's configuration or credentials. If the error says the home directory is unavailable, quit Delta-V and open it from Applications, or ensure `HOME` is set when launching from Terminal.
+
 If you finish signing in directly in the terminal app, choose **Check now** in Delta-V to read the saved sign-in. No coding task or model prompt is needed.
 
 Signing in on claude.ai or chatgpt.com alone does not connect Delta-V. Claude Desktop's Code tab also has a separate sign-in path, so Claude Code still needs to be installed. API-key, Claude Console, and third-party cloud-provider billing are not supported.

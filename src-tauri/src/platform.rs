@@ -830,6 +830,38 @@ pub fn open_setup_instructions(provider: ProviderId) -> Result<(), String> {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[error("Could not open connection help in your browser. Please try again.")]
+pub struct OpenConnectionHelpError;
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionHelpTopic {
+    CredentialAccess,
+    Configuration,
+}
+
+impl ConnectionHelpTopic {
+    fn address(self) -> &'static str {
+        match self {
+            Self::CredentialAccess => "https://github.com/freonoma/delta-v#privacy",
+            Self::Configuration => "https://github.com/freonoma/delta-v#connect-your-accounts",
+        }
+    }
+}
+
+pub fn open_connection_help(topic: ConnectionHelpTopic) -> Result<(), OpenConnectionHelpError> {
+    tauri_nspanel::objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::URLWithString(&NSString::from_str(topic.address()))
+            .ok_or(OpenConnectionHelpError)?;
+        if NSWorkspace::sharedWorkspace().openURL(&url) {
+            Ok(())
+        } else {
+            Err(OpenConnectionHelpError)
+        }
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
 #[error("Could not open releases in your browser. Please try again.")]
 pub struct OpenReleasesError;
 
@@ -963,6 +995,43 @@ fn session_flag(session: *const c_void, name: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_help_accepts_only_known_topics_and_fixed_readme_destinations() {
+        for (topic, fragment, heading) in [
+            ("credential_access", "privacy", "## Privacy"),
+            (
+                "configuration",
+                "connect-your-accounts",
+                "## Connect your accounts",
+            ),
+        ] {
+            let topic: ConnectionHelpTopic =
+                serde_json::from_value(serde_json::json!(topic)).unwrap();
+            let url = reqwest::Url::parse(topic.address()).unwrap();
+            assert_eq!(url.scheme(), "https");
+            assert_eq!(url.host_str(), Some("github.com"));
+            assert_eq!(url.path(), "/freonoma/delta-v");
+            assert_eq!(url.fragment(), Some(fragment));
+            assert!(url.query().is_none());
+            assert!(
+                include_str!("../../README.md")
+                    .lines()
+                    .any(|line| line == heading)
+            );
+        }
+        for invalid in [
+            "unknown",
+            "https://example.com",
+            "file:///tmp/credentials",
+            "javascript:alert(1)",
+            "configuration#other",
+        ] {
+            assert!(
+                serde_json::from_value::<ConnectionHelpTopic>(serde_json::json!(invalid)).is_err()
+            );
+        }
+    }
 
     #[test]
     fn preference_views_order_commits_and_error_changes_without_persisting_revisions() {

@@ -11,34 +11,52 @@ const setupUrls: Record<ProviderId, string> = {
   codex: "https://learn.chatgpt.com/docs/codex/cli",
 };
 
-function SetupInstructions({ provider }: { provider: ProviderId }) {
+function InstructionsLink({ href, label, accessibleLabel, onOpen }: {
+  href: string; label: string; accessibleLabel: string; onOpen: () => Promise<void>;
+}) {
   const [opening, setOpening] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const openingRef = useRef(false);
 
   async function open() {
-    if (opening) return;
+    if (openingRef.current) return;
+    openingRef.current = true;
     setOpening(true);
     setFailure(null);
-    try { await invoke("open_setup_instructions", { provider }); }
+    try { await onOpen(); }
     catch (caught: unknown) { setFailure(errorMessage(caught)); }
-    finally { setOpening(false); }
+    finally { openingRef.current = false; setOpening(false); }
   }
 
   return (
     <div className="setup-instructions">
-      <a className="setup-link" href={setupUrls[provider]} target="_blank" rel="noopener noreferrer"
-        aria-label={`${clientNames[provider]} setup instructions (opens in browser)`} aria-disabled={opening}
+      <a className="setup-link" href={href} target="_blank" rel="noopener noreferrer"
+        aria-label={`${accessibleLabel} (opens in browser)`} aria-disabled={opening}
         onClick={(event) => {
           if (native) {
             event.preventDefault();
             void open();
           }
         }}>
-        {opening ? "Opening instructions" : `${clientNames[provider]} setup`}<Icon name="external" />
+        {opening ? "Opening instructions" : label}<Icon name="external" />
       </a>
       {failure && <p className="setup-error" role="alert">{failure}</p>}
     </div>
   );
+}
+
+function SetupInstructions({ provider }: { provider: ProviderId }) {
+  return <InstructionsLink href={setupUrls[provider]} label={`${clientNames[provider]} setup`}
+    accessibleLabel={`${clientNames[provider]} setup instructions`}
+    onOpen={() => invoke<void>("open_setup_instructions", { provider })} />;
+}
+
+function ConnectionHelp({ provider, topic }: { provider: ProviderId; topic: "credential_access" | "configuration" }) {
+  const access = topic === "credential_access";
+  const label = access ? "Credential access help" : "Connection setup help";
+  const href = access ? "https://github.com/freonoma/delta-v#privacy" : "https://github.com/freonoma/delta-v#connect-your-accounts";
+  return <InstructionsLink href={href} label={label} accessibleLabel={`${label} for ${providerNames[provider]}`}
+    onOpen={() => invoke<void>("open_connection_help", { topic })} />;
 }
 
 function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
@@ -119,14 +137,16 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
   } else if (canReconnect) {
     help = `Reconnect tries your saved ${clientNames[provider.id]} sign-in. Sign in again to connect another account.`;
   } else if (issue.kind === "credential_access") {
-    help = "Check file and Keychain access for the CLI’s saved sign-in. The README lists the locations Delta-V reads.";
+    help = "Check file and Keychain access for the CLI’s saved sign-in. Expand the file and Keychain details in the help page.";
   } else if (issue.kind === "configuration") {
-    help = "See “Connect your accounts” in the README for setup steps.";
+    help = "Review the connection setup steps and supported credential storage settings.";
   }
   return (
     <div className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
       <p>{issue.message}</p>
       {help && <p className="recovery-help">{help}</p>}
+      {(issue.kind === "credential_access" || issue.kind === "configuration") &&
+        <ConnectionHelp key={`${provider.id}:${issue.kind}`} provider={provider.id} topic={issue.kind} />}
       {(needsSignIn || canReconnect) && <SetupInstructions provider={provider.id} />}
       {showActions && (needsSignIn || canReconnect) && !confirmSignIn && (
         <div className="recovery-actions">
