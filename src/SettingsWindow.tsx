@@ -174,6 +174,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
       <div ref={content} className="settings-section-content">
         {controller.error && <p className="notice global-error" role="alert">{controller.error}</p>}
         {state.settings_error && <p className="notice global-error" role="status">{state.settings_error}</p>}
+        {state.cooldown_error && <p className="notice global-error" role="status">{state.cooldown_error}</p>}
         <section role="tabpanel" id="settings-panel-display" aria-labelledby="settings-tab-display" hidden={section !== "display"}>
           <fieldset className="settings-display-fields" disabled={busy}>
             <legend className="visually-hidden">Display preferences</legend>

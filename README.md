@@ -116,6 +116,8 @@ Usage updates automatically. **Check now** requests the latest reading; it canno
 
 Routine Claude checks stay at least five minutes apart, including **Check now**, waking your Mac, and changing the provider selection. Automatic checks also follow a longer saved refresh interval and idle slowdown. **Check now** can request an earlier check, subject to the five-minute minimum and any service cooldown. Codex keeps its existing refresh timing. Explicit sign-in recovery can check sooner after a new sign-in; it still respects service cooldowns.
 
+Claude's service waits are saved locally and restored before checking usage after a restart. This includes the fallback wait when a service error supplies no useful retry time. Disconnecting Claude or changing its sign-in does not bypass an outstanding wait. An expired wait allows checking again; it does not restore a usage reading. Codex waits remain in memory.
+
 ### Low-allowance notifications
 
 Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low allowance threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
@@ -160,6 +162,8 @@ Delta-V asks the provider for your account's usage reading. It does not submit m
 
 Delta-V could not get a fresh reading, so it shows the last one with a stale label. If the provider asks it to wait, a countdown shows when it can try again. It retries automatically, and Check now respects the same wait. A `?` beside a menu bar percentage means that reading is stale; `?` on its own means no usable percentage is available.
 
+Restarting preserves Claude's wait, but the last usage reading still stays in memory only. After restarting during a wait, a `?` can remain until a new reading arrives. If the saved wait cannot be read, Delta-V shows a warning and pauses Claude checks for five minutes. A save failure keeps the current in-memory wait and warns that restarting may lose it or restore an older wait.
+
 **Why hasn't the percentage changed at the reset time?**
 
 Delta-V waits for a new reading from the provider before showing a refill. A countdown reaching zero does not confirm that the provider has reset the window yet.
@@ -201,6 +205,8 @@ When you choose **Reconnect** or **Sign in**, Delta-V starts the official client
 
 Delta-V's usage reader does not read conversations, project files, or session logs. With history off, new usage readings stay in memory and are lost when you quit. Optional history saves timestamps, quota labels and IDs, fractions used, reset times, window lengths, provenance, and an opaque account key. It does not save names, email addresses, tokens, or raw API responses. Settings and any recorded history stay on your Mac.
 
+Claude's saved cooldown contains only the time the wait was observed, its retry deadline and a typed service-error reason, including an HTTP status where applicable. This is saved even with history off and contains no usage readings, credentials or account identifiers. The wait applies to Claude usage checks in this Delta-V profile, including after a sign-in change.
+
 <details>
 <summary>Files and Keychain items Delta-V reads or writes</summary>
 
@@ -215,6 +221,7 @@ The app reads these locations:
 | Keychain service `Codex Auth`, account `cli\|<hash>` | Codex sign-in when configured for `keyring` or `auto` |
 | `~/.config/delta-v/config.toml` | Delta-V settings |
 | `~/.config/delta-v/panel.toml` | Pinned view, mini layout and screen position |
+| `~/.config/delta-v/claude-cooldown.toml` | Claude's saved usage-check wait |
 | `~/.local/share/delta-v/history/usage-YYYY-MM-DD.jsonl` | Saved quota readings, if history has been enabled |
 | `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/` | Check for managed Claude settings before running renewal |
 | `/Library/Managed Preferences/com.anthropic.claudecode.plist` and `/Library/Managed Preferences/<username>/com.anthropic.claudecode.plist` | Check for managed Claude preferences before running renewal |
@@ -235,6 +242,8 @@ Delta-V looks for the official clients in common installation locations. If your
 Claude's sign-in actions require absolute custom directory paths. Remove empty directory overrides before using them.
 
 Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not keep a separate copy of your credentials.
+
+Claude cooldown updates use `claude-cooldown.toml.<process>.<sequence>.tmp` in the same directory before replacing `claude-cooldown.toml`. A successful usage check clears the saved wait. If the system clock moves behind the recorded observation time, the restored wait lasts at most its originally recorded duration.
 
 Recorded history uses daily `usage-YYYY-MM-DD.jsonl` files in `~/.local/share/delta-v/history/`, grouped by UTC date. The folder is created with access limited to your macOS user, and so are its files. Retention removes readings older than the selected number of 24-hour days when Delta-V runs, including while recording is off. While rewriting a day's file, the app uses `usage-YYYY-MM-DD.<process>.<sequence>.tmp` in the same folder and cleans up interrupted temporary files on the next maintenance pass. Clear history removes these files too; it leaves unrelated files alone.
 

@@ -426,6 +426,7 @@ export default function App() {
           {preview && <div className="preview-notice">Sample data · Browser preview</div>}
           {state?.paused && <div className="global-notice">Automatic refresh is paused while your screen is locked.</div>}
           {state?.settings_error && <div className="notice global-error" role="status">{state.settings_error}</div>}
+          {state?.cooldown_error && <div className="notice global-error" role="status">{state.cooldown_error}</div>}
           {error && <div className="notice global-error" role="alert">{error}</div>}
           {panelReady && historyOpen && state && <div>
             <HistoryView settings={state.settings} providers={state.providers} active onChange={updateHistoryPreferences}

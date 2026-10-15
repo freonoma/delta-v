@@ -187,5 +187,6 @@ export interface AppState {
   settings: Settings;
   providers: ProviderState[];
   settings_error: string | null;
+  cooldown_error: string | null;
   paused: boolean;
 }

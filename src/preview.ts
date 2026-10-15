@@ -70,6 +70,9 @@ export function createPreview(search = ""): AppState {
       ], "Pro"),
     ],
     settings_error: null,
+    cooldown_error: parameters.get("cooldown_storage") === "error"
+      ? "Could not read or save Claude's usage-check wait. Restarting may lose the current wait or restore an older one."
+      : null,
     paused: false,
   };
 }

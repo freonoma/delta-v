@@ -1,3 +1,4 @@
+mod cooldown;
 mod credentials;
 mod history;
 mod history_export;

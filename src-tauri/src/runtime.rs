@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::{
+    cooldown::{self, Store as CooldownStore},
     credentials,
     history::Retention,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
@@ -54,6 +55,7 @@ pub struct AppState {
     pub settings: Settings,
     pub providers: Vec<ProviderState>,
     pub settings_error: Option<String>,
+    pub cooldown_error: Option<String>,
     pub paused: bool,
 }
 
@@ -68,6 +70,7 @@ struct Schedule {
     cadence: i64,
     waiting_for_sign_in: bool,
     cooldown_issue: Option<Issue>,
+    service_wait: Option<cooldown::Wait>,
     recovery_cancel: Option<Arc<AtomicBool>>,
     last_recovery_started: Option<i64>,
 }
@@ -84,7 +87,14 @@ impl Schedule {
         } else {
             0
         };
-        self.next_due.max(self.blocked_until).max(spacing)
+        self.next_due
+            .max(self.blocked_until)
+            .max(spacing)
+            .max(self.service_deadline())
+    }
+
+    fn service_deadline(&self) -> i64 {
+        self.service_wait.as_ref().map_or(0, |wait| wait.retry_at)
     }
 }
 
@@ -114,6 +124,7 @@ impl Inner {
 pub struct Runtime {
     inner: Mutex<Inner>,
     history: Recorder,
+    cooldown: CooldownStore,
     identity: providers::IdentityCache,
     client: reqwest::Client,
     wake: Notify,
@@ -132,6 +143,35 @@ impl Runtime {
                 Some(error.to_string()),
             ),
         };
+        let cooldown = CooldownStore::new(std::env::var_os("HOME").map(|home| {
+            std::path::PathBuf::from(home).join(".config/delta-v/claude-cooldown.toml")
+        }));
+        let mut inner = Inner {
+            view: AppState {
+                revision: 0,
+                settings: settings.clone(),
+                providers: PROVIDERS
+                    .into_iter()
+                    .map(|id| ProviderState {
+                        id,
+                        snapshot: None,
+                        error: None,
+                        recovery: None,
+                        refreshing: false,
+                        stale: true,
+                        next_retry_at: None,
+                    })
+                    .collect(),
+                settings_error,
+                cooldown_error: None,
+                paused: false,
+            },
+            schedules: Default::default(),
+            notifications: Evaluator::default(),
+            notification_generation: 0,
+            notification_permission: None,
+        };
+        restore_claude_wait(&mut inner, &cooldown, providers::now());
         Ok(Self {
             history: Recorder::new(
                 std::env::var_os("HOME").map(|home| {
@@ -141,30 +181,8 @@ impl Runtime {
                 settings.history_retention,
             ),
             identity: providers::IdentityCache::default(),
-            inner: Mutex::new(Inner {
-                view: AppState {
-                    revision: 0,
-                    settings,
-                    providers: PROVIDERS
-                        .into_iter()
-                        .map(|id| ProviderState {
-                            id,
-                            snapshot: None,
-                            error: None,
-                            recovery: None,
-                            refreshing: false,
-                            stale: true,
-                            next_retry_at: None,
-                        })
-                        .collect(),
-                    settings_error,
-                    paused: false,
-                },
-                schedules: Default::default(),
-                notifications: Evaluator::default(),
-                notification_generation: 0,
-                notification_permission: None,
-            }),
+            cooldown,
+            inner: Mutex::new(inner),
             client: providers::client()?,
             wake: Notify::new(),
             quitting: AtomicBool::new(false),
@@ -654,11 +672,109 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
             schedule.blocked_until = 0;
         }
         schedule.next_due = schedule.next_poll_at(state.id);
-        if schedule.blocked_until > now {
+        if schedule.blocked_until.max(schedule.service_deadline()) > now {
             state.next_retry_at = Some(schedule.next_due);
-            state.error = schedule.cooldown_issue.clone();
+            state.error = active_cooldown_issue(schedule, now);
         }
     }
+}
+
+fn cooldown_issue(wait: &cooldown::Wait) -> Issue {
+    match wait.reason {
+        cooldown::Reason::RateLimited => ProviderError::RateLimited { retry_at: None },
+        cooldown::Reason::AccessDenied => ProviderError::AccessDenied { retry_at: None },
+        cooldown::Reason::Service { status } => ProviderError::Service {
+            status,
+            retry_at: None,
+        },
+    }
+    .issue()
+}
+
+fn active_cooldown_issue(schedule: &Schedule, now: i64) -> Option<Issue> {
+    schedule
+        .service_wait
+        .as_ref()
+        .filter(|wait| wait.retry_at > now)
+        .map(cooldown_issue)
+        .or_else(|| schedule.cooldown_issue.clone())
+}
+
+fn restore_claude_wait(inner: &mut Inner, store: &CooldownStore, now: i64) {
+    let index = provider_index(ProviderId::Claude);
+    let wait = match store.load(now) {
+        Ok(wait) => wait,
+        Err(error) => {
+            let recovered = error.recovered_wait().cloned();
+            inner.view.cooldown_error = Some(if recovered.is_some() {
+                format!("{error} The Claude wait still applies while Delta-V is running.")
+            } else {
+                format!("{error} Claude checks are paused for five minutes.")
+            });
+            if recovered.is_none() {
+                let schedule = &mut inner.schedules[index];
+                schedule.blocked_until = now.saturating_add(CLAUDE_MIN_INTERVAL);
+                schedule.next_due = schedule.blocked_until;
+                schedule.cooldown_issue = Some(Issue {
+                    kind: IssueKind::Service,
+                    message: "Claude checks are temporarily paused because the saved wait could not be read.".to_owned(),
+                });
+            }
+            recovered
+        }
+    };
+    let schedule = &mut inner.schedules[index];
+    if let Some(wait) = wait {
+        schedule.blocked_until = wait.retry_at;
+        schedule.next_due = wait.retry_at;
+        schedule.failures = 1;
+        schedule.cooldown_issue = Some(cooldown_issue(&wait));
+        schedule.service_wait = Some(wait);
+    }
+    if inner.view.settings.is_enabled(ProviderId::Claude) && schedule.blocked_until > now {
+        let state = &mut inner.view.providers[index];
+        state.error = schedule.cooldown_issue.clone();
+        state.next_retry_at = Some(schedule.blocked_until);
+        state.stale = true;
+    }
+}
+
+fn remember_claude_wait(schedule: &mut Schedule, error: &ProviderError, now: i64) {
+    if schedule.service_deadline() <= now {
+        schedule.service_wait = None;
+    }
+    let reason = match error {
+        ProviderError::RateLimited { .. } => cooldown::Reason::RateLimited,
+        ProviderError::AccessDenied { .. } => cooldown::Reason::AccessDenied,
+        ProviderError::Service { status, .. } => cooldown::Reason::Service { status: *status },
+        _ => return,
+    };
+    let retry_at = schedule
+        .blocked_until
+        .max(schedule.after_last_start(CLAUDE_MIN_INTERVAL));
+    if retry_at > schedule.service_deadline() {
+        schedule.service_wait = Some(cooldown::Wait {
+            observed_at: now,
+            retry_at,
+            reason,
+        });
+    }
+}
+
+fn persist_claude_wait(inner: &mut Inner, store: &CooldownStore, now: i64) {
+    let wait = inner.schedules[provider_index(ProviderId::Claude)]
+        .service_wait
+        .as_ref()
+        .filter(|wait| wait.retry_at > now);
+    // Keep writes ordered with completed responses, including responses after disconnecting.
+    inner.view.cooldown_error = store.save(wait).err().map(|error| {
+        let consequence = if wait.is_some() {
+            "Restarting may lose the current wait or restore an older one."
+        } else {
+            "An older wait may return after restarting."
+        };
+        format!("{error} {consequence}")
+    });
 }
 
 fn provider_index(provider: ProviderId) -> usize {
@@ -704,7 +820,9 @@ fn begin_recovery(
                 .to_owned(),
         );
     }
-    if !schedule.waiting_for_sign_in && now < schedule.blocked_until {
+    if (!schedule.waiting_for_sign_in && now < schedule.blocked_until)
+        || now < schedule.service_deadline()
+    {
         return Err(
             "The provider asked us to wait. Reconnect after the countdown ends.".to_owned(),
         );
@@ -812,7 +930,8 @@ async fn recovery_fetch(
                     0
                 } else {
                     schedule.blocked_until
-                });
+                })
+                .max(schedule.service_deadline());
             if providers::now() >= permitted {
                 schedule.last_started = Some(providers::now());
                 true
@@ -944,14 +1063,18 @@ fn finish_recovery(
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
+        let now = providers::now();
         let accepted = complete_recovery(
             &mut inner,
             index,
             cancel.load(Ordering::Relaxed),
             result,
             issue,
-            providers::now(),
+            now,
         );
+        if index == provider_index(ProviderId::Claude) {
+            persist_claude_wait(&mut inner, &runtime.cooldown, now);
+        }
         let ticket = notification_ticket(&inner, accepted.as_ref());
         (accepted, ticket)
     };
@@ -979,7 +1102,12 @@ fn complete_recovery(
         .is_enabled(inner.view.providers[index].id)
     {
         if let Some(Err(error)) = &result {
-            preserve_service_wait(&mut inner.schedules[index], error, now);
+            preserve_service_wait(
+                &mut inner.schedules[index],
+                inner.view.providers[index].id,
+                error,
+                now,
+            );
         }
         return None;
     }
@@ -1270,6 +1398,9 @@ fn finish(
         };
         let now = providers::now();
         let accepted = finish_poll(&mut inner, index, generation, now, result);
+        if index == provider_index(ProviderId::Claude) {
+            persist_claude_wait(&mut inner, &runtime.cooldown, now);
+        }
         let ticket = notification_ticket(&inner, accepted.as_ref());
         (accepted, ticket)
     };
@@ -1300,17 +1431,17 @@ fn finish_poll(
             .is_enabled(inner.view.providers[index].id)
     {
         if let Err(error) = &result {
-            preserve_service_wait(schedule, error, now);
+            preserve_service_wait(schedule, inner.view.providers[index].id, error, now);
         }
         if inner
             .view
             .settings
             .is_enabled(inner.view.providers[index].id)
-            && schedule.blocked_until > now
+            && schedule.blocked_until.max(schedule.service_deadline()) > now
         {
             inner.view.providers[index].next_retry_at =
                 Some(schedule.next_poll_at(inner.view.providers[index].id));
-            inner.view.providers[index].error = schedule.cooldown_issue.clone();
+            inner.view.providers[index].error = active_cooldown_issue(schedule, now);
         }
         return None;
     }
@@ -1320,7 +1451,12 @@ fn finish_poll(
     accepted
 }
 
-fn preserve_service_wait(schedule: &mut Schedule, error: &ProviderError, now: i64) {
+fn preserve_service_wait(
+    schedule: &mut Schedule,
+    provider: ProviderId,
+    error: &ProviderError,
+    now: i64,
+) {
     if matches!(
         error,
         ProviderError::RateLimited { .. }
@@ -1335,6 +1471,9 @@ fn preserve_service_wait(schedule: &mut Schedule, error: &ProviderError, now: i6
         schedule.next_due = schedule.next_due.max(schedule.blocked_until);
         schedule.waiting_for_sign_in = false;
         schedule.cooldown_issue = Some(error.issue());
+        if provider == ProviderId::Claude {
+            remember_claude_wait(schedule, error, now);
+        }
     }
 }
 
@@ -1355,6 +1494,7 @@ fn apply_result(
             schedule.blocked_until = 0;
             schedule.waiting_for_sign_in = false;
             schedule.cooldown_issue = None;
+            schedule.service_wait = None;
             state.error = None;
             state.next_retry_at = None;
             state.snapshot = Some(snapshot);
@@ -1375,6 +1515,9 @@ fn apply_result(
                 state.snapshot = None;
             }
             state.error = Some(error.issue());
+            if state.id == ProviderId::Claude {
+                remember_claude_wait(schedule, &error, now);
+            }
             state.next_retry_at = Some(schedule.next_poll_at(state.id));
             state.stale = true;
         }
@@ -2121,6 +2264,7 @@ mod tests {
                     next_retry_at: None,
                 }],
                 settings_error: None,
+                cooldown_error: None,
                 paused: false,
             },
             schedules: Default::default(),
@@ -2782,6 +2926,312 @@ mod tests {
                 "{trigger}"
             );
         }
+    }
+
+    struct CooldownDirectory(std::path::PathBuf);
+
+    impl CooldownDirectory {
+        fn new() -> Self {
+            static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "delta-v-runtime-cooldown-{}-{}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> std::path::PathBuf {
+            self.0.join("claude-cooldown.toml")
+        }
+        fn store(&self) -> CooldownStore {
+            CooldownStore::new(Some(self.path()))
+        }
+    }
+
+    impl Drop for CooldownDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fresh_start() -> Inner {
+        let mut state = polling_inner(ProviderSelection::Both);
+        state.schedules = Default::default();
+        for provider in &mut state.view.providers {
+            provider.snapshot = None;
+            provider.stale = true;
+        }
+        state
+    }
+
+    #[test]
+    fn saved_claude_wait_blocks_startup_and_manual_checks_without_blocking_codex() {
+        let directory = CooldownDirectory::new();
+        let store = directory.store();
+        let mut state = polling_inner(ProviderSelection::Both);
+        apply_result(
+            &mut state,
+            0,
+            300,
+            101,
+            Err(ProviderError::RateLimited {
+                retry_at: Some(3700),
+            }),
+        );
+        persist_claude_wait(&mut state, &store, 101);
+        assert!(state.view.cooldown_error.is_none());
+
+        let mut restarted = fresh_start();
+        restore_claude_wait(&mut restarted, &store, 200);
+        assert!(restarted.view.providers[0].snapshot.is_none());
+        assert!(restarted.view.providers[0].stale);
+        assert_eq!(restarted.view.providers[0].next_retry_at, Some(3700));
+        assert_eq!(
+            restarted.view.providers[0].error.as_ref().unwrap().kind,
+            IssueKind::RateLimited
+        );
+        queue_manual_refresh(&mut restarted);
+        assert_eq!(
+            queue_polls(&mut restarted, active(), 200),
+            vec![(1, ProviderId::Codex, 0)]
+        );
+        restarted.view.paused = true;
+        assert!(queue_polls(&mut restarted, active(), 3699).is_empty());
+        assert_eq!(
+            queue_polls(&mut restarted, active(), 3700),
+            vec![(0, ProviderId::Claude, 0)]
+        );
+    }
+
+    #[test]
+    fn persisted_service_errors_keep_the_floor_but_network_and_auth_waits_are_not_saved() {
+        let directory = CooldownDirectory::new();
+        let store = directory.store();
+        for error in [
+            ProviderError::RateLimited { retry_at: None },
+            ProviderError::RateLimited {
+                retry_at: Some(101),
+            },
+            ProviderError::AccessDenied {
+                retry_at: Some(120),
+            },
+            ProviderError::Service {
+                status: 503,
+                retry_at: None,
+            },
+        ] {
+            let mut state = polling_inner(ProviderSelection::Claude);
+            apply_result(&mut state, 0, 300, 101, Err(error));
+            persist_claude_wait(&mut state, &store, 101);
+            assert_eq!(store.load(102).unwrap().unwrap().retry_at, 400);
+            let mut restarted = fresh_start();
+            restore_claude_wait(&mut restarted, &store, 102);
+            restarted.view.settings.providers = ProviderSelection::Claude;
+            queue_manual_refresh(&mut restarted);
+            assert!(queue_polls(&mut restarted, active(), 399).is_empty());
+            assert_eq!(queue_polls(&mut restarted, active(), 400).len(), 1);
+        }
+        for error in [
+            ProviderError::Network,
+            ProviderError::Authentication,
+            ProviderError::Response("Invalid".into()),
+        ] {
+            let mut state = polling_inner(ProviderSelection::Claude);
+            apply_result(&mut state, 0, 300, 101, Err(error));
+            persist_claude_wait(&mut state, &store, 101);
+            assert!(store.load(102).unwrap().is_none());
+        }
+        let mut state = polling_inner(ProviderSelection::Both);
+        apply_result(
+            &mut state,
+            1,
+            60,
+            101,
+            Err(ProviderError::RateLimited {
+                retry_at: Some(3700),
+            }),
+        );
+        assert!(state.schedules[1].service_wait.is_none());
+    }
+
+    #[test]
+    fn late_service_errors_survive_disconnect_and_cancelled_recovery() {
+        for recovering in [false, true] {
+            let directory = CooldownDirectory::new();
+            let store = directory.store();
+            let mut state = polling_inner(ProviderSelection::Claude);
+            if recovering {
+                begin_recovery(
+                    &mut state,
+                    0,
+                    platform::auth::Action::SignIn,
+                    Arc::new(AtomicBool::new(false)),
+                    101,
+                )
+                .unwrap();
+            } else {
+                state.schedules[0].poll_generation = Some(0);
+            }
+            change_connection(&mut state, 0, false, 102);
+            let result = Err(ProviderError::RateLimited {
+                retry_at: Some(3700),
+            });
+            if recovering {
+                complete_recovery(&mut state, 0, true, Some(result), None, 103);
+            } else {
+                finish_poll(&mut state, 0, 0, 103, result);
+            }
+            persist_claude_wait(&mut state, &store, 103);
+            assert_eq!(store.load(104).unwrap().unwrap().retry_at, 3700);
+            let mut restarted = fresh_start();
+            restarted.view.settings.claude_enabled = false;
+            restore_claude_wait(&mut restarted, &store, 104);
+            assert!(restarted.view.providers[0].error.is_none());
+            assert!(restarted.view.providers[0].next_retry_at.is_none());
+            change_connection(&mut restarted, 0, true, 105);
+            assert_eq!(restarted.view.providers[0].next_retry_at, Some(3700));
+            assert!(
+                begin_recovery(
+                    &mut restarted,
+                    0,
+                    platform::auth::Action::SignIn,
+                    Arc::new(AtomicBool::new(false)),
+                    106
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn obsolete_success_cannot_clear_a_wait_but_accepted_success_does() {
+        let directory = CooldownDirectory::new();
+        let store = directory.store();
+        let mut state = polling_inner(ProviderSelection::Claude);
+        let snapshot = state.view.providers[0].snapshot.clone().unwrap();
+        state.schedules[0].poll_generation = Some(0);
+        change_connection(&mut state, 0, false, 101);
+        preserve_service_wait(
+            &mut state.schedules[0],
+            ProviderId::Claude,
+            &ProviderError::RateLimited {
+                retry_at: Some(3700),
+            },
+            102,
+        );
+        assert!(finish_poll(&mut state, 0, 0, 103, Ok(snapshot.clone())).is_none());
+        persist_claude_wait(&mut state, &store, 103);
+        assert_eq!(store.load(104).unwrap().unwrap().retry_at, 3700);
+
+        change_connection(&mut state, 0, true, 3700);
+        let pending = queue_polls(&mut state, active(), 3700);
+        assert_eq!(pending.len(), 1);
+        assert!(finish_poll(&mut state, 0, pending[0].2, 3701, Ok(snapshot)).is_some());
+        persist_claude_wait(&mut state, &store, 3701);
+        assert!(store.load(3701).unwrap().is_none());
+        let mut restarted = fresh_start();
+        restore_claude_wait(&mut restarted, &store, 3702);
+        assert!(restarted.view.providers[0].snapshot.is_none());
+        assert_eq!(queue_polls(&mut restarted, active(), 3702).len(), 2);
+    }
+
+    #[test]
+    fn newer_shorter_error_or_auth_failure_does_not_remove_an_outstanding_wait() {
+        let directory = CooldownDirectory::new();
+        let store = directory.store();
+        let mut state = polling_inner(ProviderSelection::Claude);
+        apply_result(
+            &mut state,
+            0,
+            300,
+            101,
+            Err(ProviderError::RateLimited {
+                retry_at: Some(3700),
+            }),
+        );
+        apply_result(
+            &mut state,
+            0,
+            300,
+            102,
+            Err(ProviderError::Service {
+                status: 503,
+                retry_at: Some(200),
+            }),
+        );
+        apply_result(&mut state, 0, 300, 103, Err(ProviderError::Authentication));
+        queue_manual_refresh(&mut state);
+        assert_eq!(state.view.providers[0].next_retry_at, Some(3700));
+        assert!(
+            begin_recovery(
+                &mut state,
+                0,
+                platform::auth::Action::Renew,
+                Arc::new(AtomicBool::new(false)),
+                104
+            )
+            .is_err()
+        );
+        persist_claude_wait(&mut state, &store, 104);
+        assert_eq!(store.load(105).unwrap().unwrap().retry_at, 3700);
+        apply_result(&mut state, 0, 300, 3701, Err(ProviderError::Authentication));
+        persist_claude_wait(&mut state, &store, 3701);
+        assert!(store.load(3702).unwrap().is_none());
+    }
+
+    #[test]
+    fn damaged_storage_warns_and_falls_back_without_affecting_settings_or_codex() {
+        let directory = CooldownDirectory::new();
+        std::fs::write(directory.path(), "invalid").unwrap();
+        let store = directory.store();
+        let mut state = fresh_start();
+        state.view.settings_error = Some("Existing settings issue".into());
+        restore_claude_wait(&mut state, &store, 100);
+        assert!(state.view.cooldown_error.is_some());
+        assert_eq!(
+            state.view.settings_error.as_deref(),
+            Some("Existing settings issue")
+        );
+        queue_manual_refresh(&mut state);
+        change_connection(&mut state, 0, false, 101);
+        change_connection(&mut state, 0, true, 102);
+        assert_eq!(state.view.providers[0].next_retry_at, Some(400));
+        assert_eq!(
+            queue_polls(&mut state, active(), 399),
+            vec![(1, ProviderId::Codex, 0)]
+        );
+        assert_eq!(
+            queue_polls(&mut state, active(), 400),
+            vec![(0, ProviderId::Claude, 2)]
+        );
+    }
+
+    #[test]
+    fn failed_persistence_keeps_the_current_wait_and_can_recover() {
+        let directory = CooldownDirectory::new();
+        std::fs::create_dir(directory.path()).unwrap();
+        let store = directory.store();
+        let mut state = polling_inner(ProviderSelection::Claude);
+        apply_result(
+            &mut state,
+            0,
+            300,
+            101,
+            Err(ProviderError::RateLimited {
+                retry_at: Some(3700),
+            }),
+        );
+        persist_claude_wait(&mut state, &store, 101);
+        assert!(state.view.cooldown_error.is_some());
+        assert_eq!(state.view.providers[0].next_retry_at, Some(3700));
+        queue_manual_refresh(&mut state);
+        assert!(queue_polls(&mut state, active(), 200).is_empty());
+        std::fs::remove_dir(directory.path()).unwrap();
+        persist_claude_wait(&mut state, &store, 201);
+        assert!(state.view.cooldown_error.is_none());
+        assert_eq!(store.load(202).unwrap().unwrap().retry_at, 3700);
     }
 
     fn active() -> Activity {
