@@ -114,6 +114,8 @@ The percentages and bar fill change colour when less than 20% remains. When show
 
 Usage updates automatically. **Check now** requests the latest reading; it cannot reset or replenish your allowance.
 
+Routine Claude checks stay at least five minutes apart, including **Check now**, waking your Mac, and changing the provider selection. Automatic checks also follow a longer saved refresh interval and idle slowdown. **Check now** can request an earlier check, subject to the five-minute minimum and any service cooldown. Codex keeps its existing refresh timing. Explicit sign-in recovery can check sooner after a new sign-in; it still respects service cooldowns.
+
 ### Low-allowance notifications
 
 Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low allowance threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
@@ -260,7 +262,7 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `codex_windows` | `[]` | Up to two Codex limit IDs for the compact rows, in display order; empty means Automatic |
 | `percentage_mode` | `"remaining"` | `"remaining"` or `"used"`, for the menu bar, provider summaries, and usage bars |
 | `threshold` | `20` | Low allowance threshold, from 0 to 100% remaining; the saved value controls highlighting and enabled notifications watch for crossings below it |
-| `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; idle and error backoff still apply |
+| `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; routine Claude checks have a 300-second minimum. Idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
 | `notifications_enabled` | `false` | Local low-allowance alerts for both connected providers; macOS alert permission is also required |
 | `history_recording` | `false` | Save new quota readings locally for both connected providers |

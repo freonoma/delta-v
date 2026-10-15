@@ -56,6 +56,10 @@ Keep each pull request focused on one problem. A few conventions matter here:
 
 Parser fixtures live in `src-tauri/tests/fixtures/`. If you change a parser, review the input fixture and expected output together. Do not replace expected output just to make a test pass. Follow the [fixture notes](src-tauri/tests/fixtures/README.md) when adding a response: remove credentials and identifying fields while preserving the structure needed to reproduce the problem.
 
+### Usage polling
+
+Routine Claude requests must start at least 300 seconds apart within an app run. Enforce this in the shared scheduling gate so Check now, unlock, provider selection, connection changes, and quota resets cannot bypass it. Longer service cooldowns still apply. Keep Codex's timing and explicit sign-in recovery unchanged. Freshness and notification checks must use the effective cadence for each provider. Use synthetic clocks and responses to test these rules without contacting a usage service.
+
 ### History calculations
 
 History queries read saved files only. Keep each provider, account, quota ID, window length, and provenance separate. A daily summary is the highest usage recorded that day, which is also the lowest recorded remaining allowance. It does not measure tokens spent or work completed. Days follow the Mac's current time zone, captured once per query, including daylight saving changes. The 7-day and 30-day periods include today.

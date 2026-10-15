@@ -25,6 +25,7 @@ use crate::{
 };
 
 const PROVIDERS: [ProviderId; 2] = [ProviderId::Claude, ProviderId::Codex];
+const CLAUDE_MIN_INTERVAL: i64 = 300;
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,13 +63,29 @@ struct Schedule {
     poll_generation: Option<u64>,
     next_due: i64,
     blocked_until: i64,
-    last_started: i64,
+    last_started: Option<i64>,
     failures: u32,
     cadence: i64,
     waiting_for_sign_in: bool,
     cooldown_issue: Option<Issue>,
     recovery_cancel: Option<Arc<AtomicBool>>,
     last_recovery_started: Option<i64>,
+}
+
+impl Schedule {
+    fn after_last_start(&self, seconds: i64) -> i64 {
+        self.last_started
+            .map_or(0, |started| started.saturating_add(seconds))
+    }
+
+    fn next_poll_at(&self, provider: ProviderId) -> i64 {
+        let spacing = if provider == ProviderId::Claude && !self.waiting_for_sign_in {
+            self.after_last_start(CLAUDE_MIN_INTERVAL)
+        } else {
+            0
+        };
+        self.next_due.max(self.blocked_until).max(spacing)
+    }
 }
 
 struct Inner {
@@ -319,7 +336,7 @@ fn notification_ticket(
 fn notification_max_age(inner: &Inner, provider: ProviderId) -> u64 {
     inner.schedules[provider_index(provider)]
         .cadence
-        .max(inner.view.settings.refresh_seconds as i64)
+        .max(base_interval(&inner.view.settings, provider))
         .saturating_add(30) as u64
 }
 
@@ -570,10 +587,13 @@ fn queue_manual_refresh(inner: &mut Inner) {
         if state.recovery.is_some() || !inner.view.settings.is_enabled(state.id) {
             continue;
         }
-        schedule.next_due = schedule.last_started.saturating_add(10);
+        schedule.next_due = schedule.after_last_start(10);
         if schedule.waiting_for_sign_in {
             // A new CLI sign-in can recover immediately; server cooldowns still apply.
             schedule.blocked_until = 0;
+        }
+        schedule.next_due = schedule.next_poll_at(state.id);
+        if state.error.is_some() {
             state.next_retry_at = Some(schedule.next_due);
         }
     }
@@ -629,12 +649,13 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
         state.recovery = Some(RecoveryStage::Cancelling);
     }
     if enabled {
-        schedule.next_due = schedule.last_started.saturating_add(10);
+        schedule.next_due = schedule.after_last_start(10);
         if schedule.waiting_for_sign_in {
             schedule.blocked_until = 0;
         }
+        schedule.next_due = schedule.next_poll_at(state.id);
         if schedule.blocked_until > now {
-            state.next_retry_at = Some(schedule.blocked_until);
+            state.next_retry_at = Some(schedule.next_due);
             state.error = schedule.cooldown_issue.clone();
         }
     }
@@ -785,17 +806,15 @@ async fn recovery_fetch(
                 return None;
             }
             let schedule = &mut inner.schedules[index];
-            let permitted =
-                schedule
-                    .last_started
-                    .saturating_add(10)
-                    .max(if schedule.waiting_for_sign_in {
-                        0
-                    } else {
-                        schedule.blocked_until
-                    });
+            let permitted = schedule
+                .after_last_start(10)
+                .max(if schedule.waiting_for_sign_in {
+                    0
+                } else {
+                    schedule.blocked_until
+                });
             if providers::now() >= permitted {
-                schedule.last_started = providers::now();
+                schedule.last_started = Some(providers::now());
                 true
             } else {
                 false
@@ -967,9 +986,10 @@ fn complete_recovery(
     if let Some(result) = result
         && (!cancelled || result.is_err())
     {
-        let cadence = inner.schedules[index]
-            .cadence
-            .max(inner.view.settings.refresh_seconds as i64);
+        let cadence = inner.schedules[index].cadence.max(base_interval(
+            &inner.view.settings,
+            inner.view.providers[index].id,
+        ));
         let accepted = result.as_ref().ok().cloned();
         apply_result(inner, index, cadence, now, result);
         return accepted;
@@ -1061,13 +1081,21 @@ pub fn start(app: AppHandle) {
     });
 }
 
-fn interval(settings: &Settings, idle_seconds: Option<f64>) -> i64 {
+fn base_interval(settings: &Settings, provider: ProviderId) -> i64 {
+    let minimum = match provider {
+        ProviderId::Claude => CLAUDE_MIN_INTERVAL,
+        ProviderId::Codex => 0,
+    };
+    (settings.refresh_seconds as i64).max(minimum)
+}
+
+fn interval(settings: &Settings, provider: ProviderId, idle_seconds: Option<f64>) -> i64 {
     let minimum = match idle_seconds {
         Some(idle) if idle < 300.0 => 0,
         Some(idle) if idle < 900.0 => 180,
         _ => 600,
     };
-    (settings.refresh_seconds as i64).max(minimum)
+    base_interval(settings, provider).max(minimum)
 }
 
 fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
@@ -1077,60 +1105,66 @@ fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
             || settings.notifications_enabled)
 }
 
+fn queue_polls(inner: &mut Inner, activity: Activity, now: i64) -> Vec<(usize, ProviderId, u64)> {
+    let mut pending = Vec::new();
+    let was_paused = inner.view.paused;
+    inner.view.paused = activity.locked != Some(false);
+    for (index, provider) in PROVIDERS.into_iter().enumerate() {
+        let cadence = interval(&inner.view.settings, provider, activity.idle_seconds);
+        if (inner.view.paused || !inner.view.settings.is_enabled(provider))
+            && let Some(cancel) = &inner.schedules[index].recovery_cancel
+        {
+            cancel.store(true, Ordering::Relaxed);
+            inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
+        }
+        if !should_poll(&inner.view.settings, provider) {
+            continue;
+        }
+        if was_paused && !inner.view.paused {
+            inner.schedules[index].next_due = now;
+        }
+        let state = &mut inner.view.providers[index];
+        state.stale = is_stale(state, now, cadence);
+        if inner.schedules[index].cadence != cadence {
+            inner.schedules[index].cadence = cadence;
+            if inner.view.providers[index].error.is_none()
+                && let Some(snapshot) = &inner.view.providers[index].snapshot
+            {
+                inner.schedules[index].next_due = next_refresh(snapshot, cadence, now);
+            }
+        }
+        if inner.view.paused
+            || inner.schedules[index].poll_generation.is_some()
+            || inner.view.providers[index].refreshing
+            || inner.view.providers[index].recovery.is_some()
+        {
+            continue;
+        }
+        let schedule = &mut inner.schedules[index];
+        if now < schedule.next_poll_at(provider) {
+            continue;
+        }
+        schedule.last_started = Some(now);
+        let generation = schedule.generation;
+        schedule.poll_generation = Some(generation);
+        inner.view.providers[index].refreshing = true;
+        pending.push((index, provider, generation));
+    }
+    pending
+}
+
 fn tick(app: &AppHandle, activity: Activity, now: i64) {
     let runtime = app.state::<Runtime>();
     if runtime.quitting.load(Ordering::Relaxed) {
         return;
     }
-    let mut pending = Vec::new();
+    let pending;
     let changed = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
         let before = inner.view.clone();
-        let was_paused = inner.view.paused;
-        inner.view.paused = activity.locked != Some(false);
-        let cadence = interval(&inner.view.settings, activity.idle_seconds);
-        for (index, provider) in PROVIDERS.into_iter().enumerate() {
-            if (inner.view.paused || !inner.view.settings.is_enabled(provider))
-                && let Some(cancel) = &inner.schedules[index].recovery_cancel
-            {
-                cancel.store(true, Ordering::Relaxed);
-                inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
-            }
-            if !should_poll(&inner.view.settings, provider) {
-                continue;
-            }
-            if was_paused && !inner.view.paused {
-                inner.schedules[index].next_due = now;
-            }
-            let state = &mut inner.view.providers[index];
-            state.stale = is_stale(state, now, cadence);
-            if inner.schedules[index].cadence != cadence {
-                inner.schedules[index].cadence = cadence;
-                if inner.view.providers[index].error.is_none()
-                    && let Some(snapshot) = &inner.view.providers[index].snapshot
-                {
-                    inner.schedules[index].next_due = next_refresh(snapshot, cadence, now);
-                }
-            }
-            if inner.view.paused
-                || inner.schedules[index].poll_generation.is_some()
-                || inner.view.providers[index].refreshing
-                || inner.view.providers[index].recovery.is_some()
-            {
-                continue;
-            }
-            let schedule = &mut inner.schedules[index];
-            if now < schedule.next_due.max(schedule.blocked_until) {
-                continue;
-            }
-            schedule.last_started = now;
-            let generation = schedule.generation;
-            schedule.poll_generation = Some(generation);
-            inner.view.providers[index].refreshing = true;
-            pending.push((index, provider, generation));
-        }
+        pending = queue_polls(&mut inner, activity, now);
         before != inner.view
     };
     if changed {
@@ -1274,7 +1308,8 @@ fn finish_poll(
             .is_enabled(inner.view.providers[index].id)
             && schedule.blocked_until > now
         {
-            inner.view.providers[index].next_retry_at = Some(schedule.blocked_until);
+            inner.view.providers[index].next_retry_at =
+                Some(schedule.next_poll_at(inner.view.providers[index].id));
             inner.view.providers[index].error = schedule.cooldown_issue.clone();
         }
         return None;
@@ -1340,7 +1375,7 @@ fn apply_result(
                 state.snapshot = None;
             }
             state.error = Some(error.issue());
-            state.next_retry_at = Some(schedule.blocked_until);
+            state.next_retry_at = Some(schedule.next_poll_at(state.id));
             state.stale = true;
         }
     }
@@ -1829,8 +1864,8 @@ mod tests {
         let mut state = notification_state();
         let ticket = accept_notification_reading(&mut state, 100, 0.5);
         assert!(!notification_ticket_current(&state, &ticket, 99));
-        assert!(notification_ticket_current(&state, &ticket, 190));
-        assert!(!notification_ticket_current(&state, &ticket, 191));
+        assert!(notification_ticket_current(&state, &ticket, 430));
+        assert!(!notification_ticket_current(&state, &ticket, 431));
         state.schedules[0].cadence = 600;
         assert!(notification_ticket_current(&state, &ticket, 730));
         assert!(!notification_ticket_current(&state, &ticket, 731));
@@ -1931,7 +1966,7 @@ mod tests {
             schedule.poll_generation = Some(schedule.generation);
             schedule.next_due = if index == 0 { 500 } else { 250 };
             schedule.blocked_until = 700;
-            schedule.last_started = 190;
+            schedule.last_started = Some(190);
             schedule.failures = 2;
             schedule.cadence = 600;
             schedule.waiting_for_sign_in = true;
@@ -1972,7 +2007,7 @@ mod tests {
             assert_eq!(schedule.next_due.max(schedule.blocked_until), 700);
             assert_eq!(schedule.generation, index as u64 + 4);
             assert_eq!(schedule.poll_generation, Some(schedule.generation));
-            assert_eq!(schedule.last_started, 190);
+            assert_eq!(schedule.last_started, Some(190));
             assert_eq!(schedule.failures, 2);
             assert_eq!(schedule.cadence, 600);
             assert!(schedule.waiting_for_sign_in);
@@ -2238,7 +2273,7 @@ mod tests {
     #[test]
     fn manual_check_can_recover_after_sign_in_without_waiting_five_minutes() {
         let mut inner = inner();
-        inner.schedules[0].last_started = 100;
+        inner.schedules[0].last_started = Some(100);
         apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
         assert_eq!(inner.schedules[0].blocked_until, 401);
         assert!(inner.schedules[0].waiting_for_sign_in);
@@ -2288,7 +2323,7 @@ mod tests {
             ProviderError::Network,
         ] {
             let mut inner = inner();
-            inner.schedules[0].last_started = 100;
+            inner.schedules[0].last_started = Some(100);
             apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
             apply_result(&mut inner, 0, 60, 102, Err(error));
             let blocked_until = inner.schedules[0].blocked_until;
@@ -2298,22 +2333,25 @@ mod tests {
             queue_manual_refresh(&mut inner);
             let schedule = &inner.schedules[0];
             assert_eq!(schedule.blocked_until, blocked_until);
-            assert_eq!(schedule.next_due.max(schedule.blocked_until), blocked_until);
-            assert_eq!(inner.view.providers[0].next_retry_at, Some(blocked_until));
+            assert_eq!(schedule.next_due, blocked_until.max(400));
+            assert_eq!(
+                inner.view.providers[0].next_retry_at,
+                Some(blocked_until.max(400))
+            );
         }
     }
 
     #[test]
     fn repeated_manual_checks_keep_ten_second_spacing_and_inflight_state() {
         let mut inner = inner();
-        inner.schedules[0].last_started = 100;
+        inner.schedules[0].last_started = Some(100);
         apply_result(&mut inner, 0, 60, 101, Err(ProviderError::Authentication));
         for _ in 0..3 {
             queue_manual_refresh(&mut inner);
             assert_eq!(inner.schedules[0].next_due, 110);
         }
 
-        inner.schedules[0].last_started = 110;
+        inner.schedules[0].last_started = Some(110);
         inner.view.providers[0].refreshing = true;
         for _ in 0..3 {
             queue_manual_refresh(&mut inner);
@@ -2532,10 +2570,10 @@ mod tests {
         let mut inner = inner();
         let mut snapshot = inner.view.providers[0].snapshot.clone().unwrap();
         inner.schedules[0].poll_generation = Some(0);
-        inner.schedules[0].last_started = 100;
+        inner.schedules[0].last_started = Some(100);
         change_connection(&mut inner, 0, false, 101);
         change_connection(&mut inner, 0, true, 102);
-        assert_eq!(inner.schedules[0].next_due, 110);
+        assert_eq!(inner.schedules[0].next_due, 400);
         assert!(inner.view.providers[0].refreshing);
         finish_poll(&mut inner, 0, 0, 103, Ok(snapshot.clone()));
         assert!(inner.view.providers[0].snapshot.is_none());
@@ -2544,17 +2582,17 @@ mod tests {
         let generation = inner.schedules[0].generation;
         inner.schedules[0].poll_generation = Some(generation);
         inner.view.providers[0].refreshing = true;
-        finish_poll(&mut inner, 0, 0, 111, Ok(snapshot.clone()));
+        finish_poll(&mut inner, 0, 0, 401, Ok(snapshot.clone()));
         assert!(inner.view.providers[0].refreshing);
-        snapshot.fetched_at = 112;
-        finish_poll(&mut inner, 0, generation, 112, Ok(snapshot));
+        snapshot.fetched_at = 402;
+        finish_poll(&mut inner, 0, generation, 402, Ok(snapshot));
         assert_eq!(
             inner.view.providers[0]
                 .snapshot
                 .as_ref()
                 .unwrap()
                 .fetched_at,
-            112
+            402
         );
     }
 
@@ -2692,11 +2730,184 @@ mod tests {
     }
 
     #[test]
+    fn claude_poll_triggers_share_minimum_spacing() {
+        for trigger in ["manual", "unlock", "selection", "reset", "interval"] {
+            let mut state = polling_inner(ProviderSelection::Claude);
+            match trigger {
+                "manual" => {
+                    for _ in 0..3 {
+                        queue_manual_refresh(&mut state);
+                    }
+                }
+                "unlock" => state.view.paused = true,
+                "selection" => {
+                    state.view.settings.providers = ProviderSelection::Codex;
+                    save_settings_change(
+                        &mut state,
+                        |settings| settings.with_provider_selection(ProviderSelection::Claude),
+                        101,
+                        |_| Ok(()),
+                    )
+                    .unwrap();
+                }
+                "reset" => {
+                    let snapshot = state.view.providers[0].snapshot.as_mut().unwrap();
+                    snapshot.limits[0].resets_at = Some(200);
+                    state.schedules[0].next_due = next_refresh(snapshot, 300, 101);
+                }
+                "interval" => {
+                    let mut draft = DisplayPreferences::from(&state.view.settings);
+                    draft.refresh_seconds = 30;
+                    save_settings_change(
+                        &mut state,
+                        |settings| draft.apply_to(settings),
+                        101,
+                        |_| Ok(()),
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                queue_polls(&mut state, active(), 399).is_empty(),
+                "{trigger}"
+            );
+            if trigger == "reset" {
+                assert!(state.view.providers[0].stale);
+                assert!(tray_reading(&state.view, 399).is_none());
+            }
+            assert_eq!(queue_polls(&mut state, active(), 400).len(), 1, "{trigger}");
+            assert!(
+                queue_polls(&mut state, active(), 400).is_empty(),
+                "{trigger}"
+            );
+        }
+    }
+
+    fn active() -> Activity {
+        Activity {
+            idle_seconds: Some(0.0),
+            locked: Some(false),
+        }
+    }
+
+    fn polling_inner(selection: ProviderSelection) -> Inner {
+        let mut state = inner();
+        let mut codex = state.view.providers[0].clone();
+        codex.id = ProviderId::Codex;
+        codex.snapshot.as_mut().unwrap().provider = ProviderId::Codex;
+        state.view.providers.push(codex);
+        state.view.settings.providers = selection;
+        for (provider, schedule) in state.view.providers.iter_mut().zip(&mut state.schedules) {
+            let snapshot = provider.snapshot.as_mut().unwrap();
+            snapshot.limits[0].resets_at = Some(2000);
+            schedule.last_started = Some(100);
+            schedule.cadence = base_interval(&state.view.settings, provider.id);
+            schedule.next_due = next_refresh(snapshot, schedule.cadence, 100);
+        }
+        state
+    }
+
+    #[test]
+    fn claude_first_check_is_immediate_and_subsequent_checks_are_spaced() {
+        let mut state = polling_inner(ProviderSelection::Claude);
+        state.view.providers[0].snapshot = None;
+        state.schedules[0] = Schedule::default();
+        assert_eq!(queue_polls(&mut state, active(), 0).len(), 1);
+        assert_eq!(state.schedules[0].last_started, Some(0));
+        finish_poll(&mut state, 0, 0, 1, Err(ProviderError::Network));
+        queue_manual_refresh(&mut state);
+        assert!(queue_polls(&mut state, active(), 299).is_empty());
+        assert_eq!(queue_polls(&mut state, active(), 300).len(), 1);
+    }
+
+    #[test]
+    fn claude_retry_countdown_matches_short_and_long_service_waits() {
+        for retry_at in [None, Some(101), Some(5000)] {
+            let mut state = polling_inner(ProviderSelection::Claude);
+            apply_result(
+                &mut state,
+                0,
+                300,
+                101,
+                Err(ProviderError::RateLimited { retry_at }),
+            );
+            let expected = retry_at.unwrap_or(0).max(400);
+            assert_eq!(state.view.providers[0].next_retry_at, Some(expected));
+            queue_manual_refresh(&mut state);
+            assert_eq!(state.view.providers[0].next_retry_at, Some(expected));
+            assert!(queue_polls(&mut state, active(), expected - 1).is_empty());
+            assert_eq!(queue_polls(&mut state, active(), expected).len(), 1);
+        }
+    }
+
+    #[test]
+    fn claude_spacing_resumes_after_manual_sign_in_recovery() {
+        let mut state = polling_inner(ProviderSelection::Claude);
+        let mut snapshot = state.view.providers[0].snapshot.clone().unwrap();
+        apply_result(&mut state, 0, 300, 101, Err(ProviderError::Authentication));
+        queue_manual_refresh(&mut state);
+        assert!(queue_polls(&mut state, active(), 109).is_empty());
+        assert_eq!(queue_polls(&mut state, active(), 110).len(), 1);
+        snapshot.fetched_at = 111;
+        finish_poll(&mut state, 0, 0, 111, Ok(snapshot));
+        queue_manual_refresh(&mut state);
+        assert!(queue_polls(&mut state, active(), 409).is_empty());
+        assert_eq!(queue_polls(&mut state, active(), 410).len(), 1);
+    }
+
+    #[test]
+    fn codex_keeps_its_automatic_and_manual_cadence() {
+        let mut state = polling_inner(ProviderSelection::Codex);
+        assert!(queue_polls(&mut state, active(), 159).is_empty());
+        assert_eq!(
+            queue_polls(&mut state, active(), 160),
+            vec![(1, ProviderId::Codex, 0)]
+        );
+        let mut state = polling_inner(ProviderSelection::Codex);
+        queue_manual_refresh(&mut state);
+        assert!(queue_polls(&mut state, active(), 109).is_empty());
+        assert_eq!(
+            queue_polls(&mut state, active(), 110),
+            vec![(1, ProviderId::Codex, 0)]
+        );
+    }
+
+    #[test]
+    fn claude_cadence_keeps_idle_slowdown_slower_preferences_and_freshness() {
+        let mut state = polling_inner(ProviderSelection::Claude);
+        assert_eq!(
+            interval(&state.view.settings, ProviderId::Claude, Some(0.0)),
+            300
+        );
+        assert_eq!(
+            interval(&state.view.settings, ProviderId::Claude, Some(400.0)),
+            300
+        );
+        assert_eq!(
+            interval(&state.view.settings, ProviderId::Claude, Some(900.0)),
+            600
+        );
+        assert_eq!(
+            interval(&state.view.settings, ProviderId::Claude, None),
+            600
+        );
+        assert_eq!(notification_max_age(&state, ProviderId::Claude), 330);
+        assert_eq!(notification_max_age(&state, ProviderId::Codex), 90);
+        assert!(!is_stale(&state.view.providers[0], 430, 300));
+        assert!(is_stale(&state.view.providers[0], 431, 300));
+        state.view.settings.refresh_seconds = 900;
+        assert!(queue_polls(&mut state, active(), 999).is_empty());
+        assert_eq!(notification_max_age(&state, ProviderId::Claude), 930);
+        assert_eq!(queue_polls(&mut state, active(), 1000).len(), 1);
+    }
+
+    #[test]
     fn idle_tiers_and_backoff_are_bounded() {
         let settings = Settings::default();
-        assert_eq!(interval(&settings, Some(0.0)), 60);
-        assert_eq!(interval(&settings, Some(400.0)), 180);
-        assert_eq!(interval(&settings, None), 600);
+        assert_eq!(interval(&settings, ProviderId::Codex, Some(0.0)), 60);
+        assert_eq!(interval(&settings, ProviderId::Codex, Some(400.0)), 180);
+        assert_eq!(interval(&settings, ProviderId::Codex, None), 600);
         assert!(backoff(2, 0) > backoff(1, 0));
         assert!(backoff(u32::MAX, 100) <= 910);
     }

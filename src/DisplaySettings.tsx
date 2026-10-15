@@ -111,7 +111,7 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
         </span>
       </label>
       <label className="setting-row">
-        <span>Refresh interval<small>Backoff applies when rate limited</small></span>
+        <span>Refresh interval<small>Claude checks at least 5 minutes apart. Service waits may be longer.</small></span>
         <span className="number-field">
           <input name="interval" type="number" min="30" max="900" step="1" inputMode="numeric" value={interval} onChange={(event) => setIntervalValue(event.target.value)} />
           <span>sec</span>
