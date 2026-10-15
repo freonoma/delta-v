@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -13,7 +13,7 @@ import { BrandMark } from "./BrandMark";
 import { Icon } from "./Icon";
 import { useAppController } from "./useAppController";
 import { createSettingsDraft, isSettingsDraftDirty, reconcileSettingsDraft, validateSettingsDraft } from "./settings-draft";
-import type { SettingsDraft } from "./settings-draft";
+import type { SettingsDraft, SettingsDraftError } from "./settings-draft";
 import { isSettingsSection, settingsSections } from "./settings-navigation";
 import type { SettingsSection } from "./settings-navigation";
 import type { AppState, PanelPreferences, Theme } from "./types";
@@ -79,7 +79,8 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
     return { baseline, draft: baseline };
   });
   const [submitting, setSubmitting] = useState(false);
-  const [validation, setValidation] = useState<string | null>(null);
+  const [validation, setValidation] = useState<{ error: string; field?: SettingsDraftError["field"] } | null>(null);
+  const validationMessageId = useId();
   const [savedNotice, setSavedNotice] = useState(false);
   const [confirmClose, setConfirmClose] = useState<CloseIntent | null>(null);
   const operation = useRef(false);
@@ -132,7 +133,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
     setConfirmClose(null);
     const result = validateSettingsDraft(form.draft, state.settings.providers);
     if (result.error !== null) {
-      setValidation(result.error);
+      setValidation(result);
       setSection("display");
       window.requestAnimationFrame(() => content.current?.querySelector<HTMLInputElement>(`input[name="${result.field}"]`)?.focus());
       return;
@@ -153,7 +154,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
         await finishClose(intent);
       }
     } catch (caught: unknown) {
-      setValidation(errorMessage(caught));
+      setValidation({ error: errorMessage(caught) });
       setSection("display");
     } finally {
       operation.current = false;
@@ -180,7 +181,8 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
               setDraft={(preferences) => edit({ preferences })} layoutDraft={form.draft.layout}
               setLayoutDraft={(layout) => edit({ layout })} threshold={form.draft.threshold}
               setThreshold={(threshold) => edit({ threshold })} interval={form.draft.interval}
-              setIntervalValue={(interval) => edit({ interval })} busy={busy} onThemePreview={onThemePreview} />
+              setIntervalValue={(interval) => edit({ interval })} busy={busy} onThemePreview={onThemePreview}
+              invalidField={validation?.field} validationMessageId={validationMessageId} />
           </fieldset>
         </section>
         <section role="tabpanel" id="settings-panel-accounts" aria-labelledby="settings-tab-accounts" hidden={section !== "accounts"}>
@@ -208,7 +210,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
         </section>
       </div>
       <footer className="settings-window-footer">
-        <p className="settings-save-status" role={validation ? "alert" : "status"}>{validation ?? (notifications.pending ? "Updating notifications…" : busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
+        <p id={validationMessageId} className="settings-save-status" role={validation ? "alert" : "status"}>{validation?.error ?? (notifications.pending ? "Updating notifications…" : busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
         <div className="settings-footer-actions">
           <button className="text-button" disabled={busy || !dirty} onClick={discard}>Discard changes</button>
           <button className="primary-button" disabled={busy || !dirty} onClick={() => void save()}>Save changes</button>

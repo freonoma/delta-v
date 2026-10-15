@@ -336,6 +336,7 @@ h1, h2, p { margin: 0; }
 .window-picker select:disabled { opacity: .5; }
 .window-picker > p { margin-top: 6px; font-size: 9px; color: var(--secondary); }
 .number-field { display: flex; flex-shrink: 0; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; gap: 5px; color: var(--muted); }
+.number-field[data-invalid="true"] { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
 .number-field input { background: transparent; color: var(--text); border: 0; width: 51px; padding: 6px 0; text-align: right; font-variant-numeric: tabular-nums; appearance: textfield; }
 .number-field input::-webkit-inner-spin-button, .number-field input::-webkit-outer-spin-button { appearance: none; margin: 0; }
 .number-field > span { font-size: 10px; }

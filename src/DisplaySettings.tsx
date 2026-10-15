@@ -1,4 +1,5 @@
 import type { AppState, DisplayPreferences, MiniLayout, ProviderState, Theme } from "./types";
+import type { SettingsDraftError } from "./settings-draft";
 import { visibleTrackedLimit } from "./preference-state";
 import { providerNames } from "./provider-display";
 import { eligibleQuota } from "./usage";
@@ -41,7 +42,7 @@ function WindowPicker({ provider, selected, onChange }: { provider: ProviderStat
   );
 }
 
-export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setLayoutDraft, threshold, setThreshold, interval, setIntervalValue, busy, onThemePreview }: {
+export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setLayoutDraft, threshold, setThreshold, interval, setIntervalValue, busy, onThemePreview, invalidField, validationMessageId }: {
   state: AppState;
   now: number;
   draft: DisplayPreferences;
@@ -54,6 +55,8 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
   setIntervalValue: (value: string) => void;
   busy: boolean;
   onThemePreview: (theme: Theme | null) => void;
+  invalidField: SettingsDraftError["field"] | undefined;
+  validationMessageId: string;
 }) {
   const options = state.providers
     .filter((provider) => state.settings.providers === "both" || state.settings.providers === provider.id)
@@ -62,6 +65,8 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
       .map((limit) => ({ value: `${provider.id}:${limit.id}`, label: `${providerNames[provider.id]} · ${limit.label}` })));
   const tracked = visibleTrackedLimit(draft.tracked_limit, state.settings.providers);
   const missingTracked = tracked !== "auto" && !options.some((option) => option.value === tracked);
+  const thresholdInvalid = invalidField === "threshold";
+  const intervalInvalid = invalidField === "interval";
 
   return (
     <>
@@ -105,15 +110,19 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
       </label>
       <label className="setting-row">
         <span>Low allowance threshold<small>Remaining percentage used for highlighting and enabled alerts. Save changes to apply.</small></span>
-        <span className="number-field">
-          <input name="threshold" type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold} onChange={(event) => setThreshold(event.target.value)} />
+        <span className="number-field" data-invalid={thresholdInvalid || undefined}>
+          <input name="threshold" type="number" min="0" max="100" step="1" inputMode="numeric" value={threshold}
+            aria-invalid={thresholdInvalid || undefined} aria-describedby={thresholdInvalid ? validationMessageId : undefined}
+            onChange={(event) => setThreshold(event.target.value)} />
           <span>%</span>
         </span>
       </label>
       <label className="setting-row">
         <span>Refresh interval<small>Claude checks at least 5 minutes apart. Service waits may be longer.</small></span>
-        <span className="number-field">
-          <input name="interval" type="number" min="30" max="900" step="1" inputMode="numeric" value={interval} onChange={(event) => setIntervalValue(event.target.value)} />
+        <span className="number-field" data-invalid={intervalInvalid || undefined}>
+          <input name="interval" type="number" min="30" max="900" step="1" inputMode="numeric" value={interval}
+            aria-invalid={intervalInvalid || undefined} aria-describedby={intervalInvalid ? validationMessageId : undefined}
+            onChange={(event) => setIntervalValue(event.target.value)} />
           <span>sec</span>
         </span>
       </label>

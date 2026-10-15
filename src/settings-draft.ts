@@ -8,9 +8,11 @@ export interface SettingsDraft {
   interval: string;
 }
 
+export type SettingsDraftError = { error: string; field: "threshold" | "interval" };
+
 export type SettingsDraftValidation =
   | { preferences: DisplayPreferences; layout: MiniLayout; error: null }
-  | { error: string; field: "threshold" | "interval" };
+  | SettingsDraftError;
 
 export function createSettingsDraft(settings: DisplayPreferences, layout: MiniLayout): SettingsDraft {
   return {
