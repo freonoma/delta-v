@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppState, ProviderId, ProviderState, ReconnectAction, RecoveryPhase } from "./types";
 import { Icon } from "./Icon";
@@ -59,16 +59,46 @@ function ConnectionHelp({ provider, topic }: { provider: ProviderId; topic: "cre
     onOpen={() => invoke<void>("open_connection_help", { topic })} />;
 }
 
+function useSignInConfirmation() {
+  const [confirmSignIn, setConfirmSignIn] = useState(false);
+  const signInTrigger = useRef<HTMLButtonElement>(null);
+  const focusFallback = useRef<HTMLDivElement>(null);
+  const restoreFocus = useRef<"trigger" | "context" | null>(null);
+
+  useLayoutEffect(() => {
+    if (confirmSignIn || !restoreFocus.current) return;
+    const target = restoreFocus.current;
+    restoreFocus.current = null;
+    const trigger = signInTrigger.current;
+    if (target === "trigger" && trigger && !trigger.disabled) trigger.focus({ preventScroll: true });
+    else focusFallback.current?.focus({ preventScroll: true });
+  }, [confirmSignIn]);
+
+  function cancelSignIn() {
+    restoreFocus.current = "trigger";
+    setConfirmSignIn(false);
+  }
+
+  function continueSignIn() {
+    restoreFocus.current = "context";
+    setConfirmSignIn(false);
+  }
+
+  return { confirmSignIn, setConfirmSignIn, signInTrigger, focusFallback, cancelSignIn, continueSignIn };
+}
+
 function SignInConfirmation({ provider, disabled, onContinue, onCancel }: {
   provider: ProviderId; disabled: boolean; onContinue: () => void; onCancel: () => void;
 }) {
+  const descriptionId = useId();
   return (
     <div className="sign-in-confirmation" role="group" aria-label={`Sign in with ${clientNames[provider]}`}
-      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancel(); } }}>
-      <p>This opens {clientNames[provider]}’s sign-in flow. Choosing another account also changes the account saved by {clientNames[provider]} on this Mac.</p>
+      aria-describedby={descriptionId}
+      onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(); } }}>
+      <p id={descriptionId}>This opens {clientNames[provider]}’s sign-in flow. Choosing another account also changes the account saved by {clientNames[provider]} on this Mac.</p>
       <div className="recovery-actions">
         <button className="primary-button" onClick={onContinue} disabled={disabled}>Continue</button>
-        <button className="text-button" onClick={onCancel}>Cancel</button>
+        <button className="text-button" autoFocus onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );
@@ -108,11 +138,11 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
   onCancel: (provider: ProviderId) => void;
   showActions?: boolean;
 }) {
-  const [confirmSignIn, setConfirmSignIn] = useState(false);
+  const { confirmSignIn, setConfirmSignIn, signInTrigger, focusFallback, cancelSignIn, continueSignIn } = useSignInConfirmation();
   useEffect(() => { if (recovery) setConfirmSignIn(false); }, [recovery]);
   if (recovery) {
     return (
-      <div className="recovery-notice" role="status">
+      <div ref={focusFallback} tabIndex={-1} className="recovery-notice" role="status" aria-label={`${providerNames[provider.id]} connection`}>
         <p className="recovery-progress"><Icon name="refresh" spinning />{recoveryMessages[recovery]}</p>
         {recovery === "signing_in" && <p className="recovery-help">Return here after finishing with {clientNames[provider.id]}.</p>}
         {recovery !== "checking" && (
@@ -142,7 +172,7 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
     help = "Review the connection setup steps and supported credential storage settings.";
   }
   return (
-    <div className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
+    <div ref={focusFallback} tabIndex={-1} className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
       <p>{issue.message}</p>
       {help && <p className="recovery-help">{help}</p>}
       {(issue.kind === "credential_access" || issue.kind === "configuration") &&
@@ -150,16 +180,16 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
       {(needsSignIn || canReconnect) && <SetupInstructions provider={provider.id} />}
       {showActions && (needsSignIn || canReconnect) && !confirmSignIn && (
         <div className="recovery-actions">
-          <button className="primary-button" disabled={signInBlocked(provider, now)} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
+          <button ref={needsSignIn ? signInTrigger : undefined} className="primary-button" disabled={signInBlocked(provider, now)} onClick={() => needsSignIn ? setConfirmSignIn(true) : onReconnect(provider.id, "renew")}>
             {needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Reconnect"}
           </button>
-          {canReconnect && <button className="text-button" disabled={signInBlocked(provider, now)} onClick={() => setConfirmSignIn(true)}>Sign in again</button>}
+          {canReconnect && <button ref={signInTrigger} className="text-button" disabled={signInBlocked(provider, now)} onClick={() => setConfirmSignIn(true)}>Sign in again</button>}
         </div>
       )}
       {showActions && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInBlocked(provider, now)} onContinue={() => {
-        setConfirmSignIn(false);
+        continueSignIn();
         onReconnect(provider.id, "sign_in");
-      }} onCancel={() => setConfirmSignIn(false)} />}
+      }} onCancel={cancelSignIn} />}
       {provider.next_retry_at !== null && provider.next_retry_at > now && (
         <p className="retry-time">{needsSignIn || canReconnect ? "Next check" : "Retry"} in {shortDuration(provider.next_retry_at - now)}</p>
       )}
@@ -178,7 +208,7 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
   onCancel: (provider: ProviderId) => void;
 }) {
-  const [confirmSignIn, setConfirmSignIn] = useState(false);
+  const { confirmSignIn, setConfirmSignIn, signInTrigger, focusFallback, cancelSignIn, continueSignIn } = useSignInConfirmation();
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   useEffect(() => { if (!enabled || recovery) setConfirmSignIn(false); }, [enabled, recovery]);
   useEffect(() => { if (!enabled) setConfirmDisconnect(false); }, [enabled]);
@@ -189,7 +219,7 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
   const needsSignIn = provider.error?.kind === "sign_in" || provider.error?.kind === "client_missing";
   const signInDisabled = paused || pending || recovery !== null || signInBlocked(provider, now);
   return (
-    <div className="account-row" role="group" aria-label={`${providerNames[provider.id]} connection`} aria-busy={pending || recovery !== null}>
+    <div ref={focusFallback} tabIndex={-1} className="account-row" role="group" aria-label={`${providerNames[provider.id]} connection`} aria-busy={pending || recovery !== null}>
       <div className="account-heading">
         <div><h4>{providerNames[provider.id]}</h4><p>{status}</p></div>
         <button className="text-button" aria-label={`${enabled ? "Disconnect" : "Connect"} ${providerNames[provider.id]}${enabled ? " from Delta-V" : ""}`} disabled={pending || (!enabled && recovery !== null)} onClick={() => {
@@ -204,12 +234,12 @@ function AccountRow({ provider, enabled, pending, recovery, now, paused, onSetEn
       {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} showActions={false} />}
       {enabled && !recovery && !confirmSignIn && <div className="account-actions">
         {canReconnect && <button className="text-button" disabled={signInDisabled} onClick={() => onReconnect(provider.id, "renew")}>Reconnect</button>}
-        <button className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>{needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Sign in again"}</button>
+        <button ref={signInTrigger} className="text-button" disabled={signInDisabled} onClick={() => setConfirmSignIn(true)}>{needsSignIn ? `Sign in with ${clientNames[provider.id]}` : "Sign in again"}</button>
       </div>}
       {enabled && confirmSignIn && <SignInConfirmation provider={provider.id} disabled={signInDisabled} onContinue={() => {
-        setConfirmSignIn(false);
+        continueSignIn();
         onReconnect(provider.id, "sign_in");
-      }} onCancel={() => setConfirmSignIn(false)} />}
+      }} onCancel={cancelSignIn} />}
       {enabled && confirmDisconnect && <DisconnectConfirmation provider={provider.id} onConfirm={() => {
         setConfirmDisconnect(false);
         onSetEnabled(provider.id, false);
