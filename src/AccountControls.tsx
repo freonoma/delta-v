@@ -2,9 +2,9 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppState, ProviderId, ProviderState, ReconnectAction, RecoveryPhase } from "./types";
 import { Icon } from "./Icon";
-import { clientNames, issueStatuses, providerEnabled, providerNames, recoveryMessages, signInBlocked } from "./provider-display";
+import { clientNames, issueStatuses, providerEnabled, providerNames, rateLimitMessage, recoveryMessages, signInBlocked } from "./provider-display";
 import { errorMessage, native } from "./ui-state";
-import { shortDuration } from "./usage";
+import { shortDuration, usageCheckWait } from "./usage";
 
 const setupUrls: Record<ProviderId, string> = {
   claude: "https://code.claude.com/docs/en/quickstart",
@@ -170,10 +170,15 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
     help = "Check file and Keychain access for the CLI’s saved sign-in. Expand the file and Keychain details in the help page.";
   } else if (issue.kind === "configuration") {
     help = "Review the connection setup steps and supported credential storage settings.";
+  } else if (issue.kind === "rate_limited") {
+    help = "This does not tell us whether your allowance is exhausted.";
+    if (!provider.refreshing && provider.next_retry_at !== null && provider.next_retry_at > now) {
+      help += " Check now respects this wait.";
+    }
   }
   return (
     <div ref={focusFallback} tabIndex={-1} className={`notice error-notice${needsSignIn ? " setup-notice" : ""}`} role="status">
-      <p>{issue.message}</p>
+      <p>{issue.kind === "rate_limited" ? rateLimitMessage(provider.id) : issue.message}</p>
       {help && <p className="recovery-help">{help}</p>}
       {(issue.kind === "credential_access" || issue.kind === "configuration") &&
         <ConnectionHelp key={`${provider.id}:${issue.kind}`} provider={provider.id} topic={issue.kind} />}
@@ -190,7 +195,9 @@ export function ProviderFeedback({ provider, recovery, now, onReconnect, onCance
         continueSignIn();
         onReconnect(provider.id, "sign_in");
       }} onCancel={cancelSignIn} />}
-      {provider.next_retry_at !== null && provider.next_retry_at > now && (
+      {issue.kind === "rate_limited" ? (
+        <p className="retry-time">{provider.refreshing ? "Checking usage" : usageCheckWait(provider.next_retry_at, now)}</p>
+      ) : provider.next_retry_at !== null && provider.next_retry_at > now && (
         <p className="retry-time">{needsSignIn || canReconnect ? "Next check" : "Retry"} in {shortDuration(provider.next_retry_at - now)}</p>
       )}
     </div>

@@ -35,6 +35,15 @@ export function shortDuration(seconds: number): string {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
+export function usageCheckWait(retryAt: number | null, now: number): string {
+  if (retryAt === null || !Number.isFinite(retryAt) || retryAt <= now) {
+    return "Waiting for the next usage check";
+  }
+  const date = new Date(retryAt * 1000);
+  const localTime = Number.isFinite(date.getTime()) ? date.toLocaleString() : null;
+  return `Checks can resume in ${shortDuration(retryAt - now)}${localTime ? ` (${localTime})` : ""}`;
+}
+
 export function sampleAge(timestamp: number, now: number): string {
   const elapsed = Math.max(0, now - timestamp);
   if (elapsed < 60) return "just now";

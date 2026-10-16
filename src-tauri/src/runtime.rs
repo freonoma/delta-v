@@ -1595,14 +1595,13 @@ pub fn publish(app: &AppHandle) {
     }
 }
 
-fn publish_view(app: &AppHandle, view: &AppState) {
-    let reading = tray_reading(view, providers::now());
+fn tray_tooltip(view: &AppState, reading: Option<&Reading>) -> String {
     let mode = view.settings.percentage_mode;
     let percentage_label = match mode {
         PercentageMode::Remaining => "remaining",
         PercentageMode::Used => "used",
     };
-    let tooltip = reading.as_ref().map_or_else(
+    let mut tooltip = reading.map_or_else(
         || "Delta-V: usage unavailable".to_owned(),
         |reading| {
             format!(
@@ -1618,6 +1617,36 @@ fn publish_view(app: &AppHandle, view: &AppState) {
             )
         },
     );
+    let limited: Vec<&str> = view
+        .providers
+        .iter()
+        .filter(|state| {
+            view.settings.providers.includes(state.id)
+                && view.settings.is_enabled(state.id)
+                && !state.refreshing
+                && state.recovery.is_none()
+                && state
+                    .error
+                    .as_ref()
+                    .is_some_and(|issue| issue.kind == IssueKind::RateLimited)
+        })
+        .map(|state| match state.id {
+            ProviderId::Claude => "Claude: usage checks temporarily limited.",
+            ProviderId::Codex => "Codex: usage checks temporarily limited.",
+        })
+        .collect();
+    if !limited.is_empty() {
+        tooltip.push('\n');
+        tooltip.push_str(&limited.join("\n"));
+        tooltip.push_str("\nOpen Delta-V for check timing.");
+    }
+    tooltip
+}
+
+fn publish_view(app: &AppHandle, view: &AppState) {
+    let reading = tray_reading(view, providers::now());
+    let mode = view.settings.percentage_mode;
+    let tooltip = tray_tooltip(view, reading.as_ref());
     if let Err(error) = tray::update(
         app,
         reading.as_ref().map(|reading| reading.percentage(mode)),
@@ -2327,6 +2356,89 @@ mod tests {
         assert!((reading.remaining - 19.0).abs() < 0.00001);
         inner.view.settings.tracked_limit = "claude:missing".into();
         assert!(tray_reading(&inner.view, 150).is_none());
+    }
+
+    #[test]
+    fn tray_tooltip_preserves_readings_and_ordinary_errors() {
+        let mut view = inner().view;
+        for (mode, percentage) in [
+            (PercentageMode::Remaining, "19% remaining"),
+            (PercentageMode::Used, "81% used"),
+        ] {
+            view.settings.percentage_mode = mode;
+            assert_eq!(
+                tray_tooltip(&view, tray_reading(&view, 150).as_ref()),
+                format!("Delta-V: {percentage}\nClaude · 5-hour")
+            );
+        }
+        view.providers[0].stale = true;
+        view.providers[0].error = Some(Issue {
+            kind: IssueKind::Network,
+            message: "Network unavailable.".into(),
+        });
+        assert_eq!(
+            tray_tooltip(&view, tray_reading(&view, 150).as_ref()),
+            "Delta-V: 81% used\nClaude · 5-hour\nLast reading, waiting for an update"
+        );
+        view.providers[0].snapshot = None;
+        assert_eq!(tray_tooltip(&view, None), "Delta-V: usage unavailable");
+    }
+
+    #[test]
+    fn tray_tooltip_explains_rate_limits_with_and_without_a_reading() {
+        let mut view = inner().view;
+        view.providers[0].error = Some(ProviderError::RateLimited { retry_at: None }.issue());
+        view.providers[0].stale = true;
+        let explanation =
+            "\nClaude: usage checks temporarily limited.\nOpen Delta-V for check timing.";
+        assert_eq!(
+            tray_tooltip(&view, tray_reading(&view, 150).as_ref()),
+            format!(
+                "Delta-V: 19% remaining\nClaude · 5-hour\nLast reading, waiting for an update{explanation}"
+            )
+        );
+        view.providers[0].snapshot = None;
+        assert_eq!(
+            tray_tooltip(&view, None),
+            format!("Delta-V: usage unavailable{explanation}")
+        );
+    }
+
+    #[test]
+    fn tray_tooltip_names_the_limited_provider_beside_another_providers_reading() {
+        let mut view = inner().view;
+        let mut codex = view.providers[0].clone();
+        codex.id = ProviderId::Codex;
+        codex.snapshot.as_mut().unwrap().provider = ProviderId::Codex;
+        view.providers.push(codex);
+        view.providers[0].snapshot = None;
+        view.providers[0].error = Some(ProviderError::RateLimited { retry_at: None }.issue());
+        assert_eq!(
+            tray_tooltip(&view, tray_reading(&view, 150).as_ref()),
+            "Delta-V: 19% remaining\nCodex · 5-hour\nClaude: usage checks temporarily limited.\nOpen Delta-V for check timing."
+        );
+        view.providers[1].error = Some(ProviderError::RateLimited { retry_at: None }.issue());
+        let tooltip = tray_tooltip(&view, tray_reading(&view, 150).as_ref());
+        assert!(tooltip.contains("Claude: usage checks temporarily limited."));
+        assert!(tooltip.contains("Codex: usage checks temporarily limited."));
+        assert_eq!(tooltip.matches("Open Delta-V for check timing.").count(), 1);
+    }
+
+    #[test]
+    fn tray_tooltip_omits_limits_for_hidden_disconnected_or_busy_providers() {
+        let mut view = inner().view;
+        view.providers[0].snapshot = None;
+        view.providers[0].error = Some(ProviderError::RateLimited { retry_at: None }.issue());
+        for reason in 0..4 {
+            let mut excluded = view.clone();
+            match reason {
+                0 => excluded.settings.providers = ProviderSelection::Codex,
+                1 => excluded.settings.claude_enabled = false,
+                2 => excluded.providers[0].refreshing = true,
+                _ => excluded.providers[0].recovery = Some(RecoveryStage::Checking),
+            }
+            assert_eq!(tray_tooltip(&excluded, None), "Delta-V: usage unavailable");
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import type { Limit, PercentageMode, ProviderId, ProviderState, RecoveryPhase, Settings } from "./types";
 import { eligibleQuota, hiddenLowQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, wholePercent } from "./usage";
+import { rateLimitMessage } from "./provider-display";
 
 const names: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 const sources: Record<Limit["provenance"], string> = {
@@ -60,9 +61,11 @@ export function MiniView({ providers, settings, now, expanded, pending, pendingR
         const provenance = [...new Set(shown.flatMap((limit) => limit ? [limit.provenance] : []))];
         const status = recovery ? recovery === "signing_in" ? "Finish signing in" : "Reconnecting"
           : !enabled ? "Disconnected"
-          : snapshot ? stale ? `Stale · ${sampleAge(snapshot.fetched_at, now)}` : provider.refreshing ? "Checking" : null
+          : snapshot && stale ? `Stale · ${sampleAge(snapshot.fetched_at, now)}${provider.refreshing ? " · checking" : ""}`
+          : provider.refreshing ? "Checking usage"
+          : snapshot ? null
           : provider.error ? ["sign_in", "authentication", "recovery"].includes(provider.error.kind) ? "Sign in needed"
-            : provider.error.kind === "rate_limited" ? "Waiting to retry" : "Usage unavailable"
+            : provider.error.kind === "rate_limited" ? "Usage checks limited" : "Usage unavailable"
           : "Reading usage";
         return (
           <section key={provider.id} className={`mini-provider ${provider.id}`} aria-label={`${names[provider.id]} usage`}
@@ -84,9 +87,10 @@ export function MiniView({ providers, settings, now, expanded, pending, pendingR
             <div className="mini-source" title={snapshot ? `Updated ${sampleAge(snapshot.fetched_at, now)}` : undefined}>
               {provenance.map((source) => <span key={source} className={`provenance ${source}`}>{sources[source]}</span>)}
               {status && <button className={`mini-status${stale || provider.error ? " stale" : ""}`}
-                disabled={pending} title={provider.error?.message ?? "Open full view"} onClick={onDetails}>{status}</button>}
-              {!snapshot && provider.next_retry_at !== null && provider.next_retry_at > now && (
-                <span>Retry in {shortDuration(provider.next_retry_at - now)}</span>
+                disabled={pending} title={provider.refreshing ? "Checking usage" : provider.error?.kind === "rate_limited"
+                  ? `${rateLimitMessage(provider.id)} Open details for check timing.` : provider.error?.message ?? "Open full view"} onClick={onDetails}>{status}</button>}
+              {!snapshot && !provider.refreshing && !recovery && provider.next_retry_at !== null && provider.next_retry_at > now && (
+                <span>{provider.error?.kind === "rate_limited" ? "Wait" : "Retry in"} {shortDuration(provider.next_retry_at - now)}</span>
               )}
               {!snapshot && <button className="mini-details" disabled={pending} onClick={onDetails}>Open details</button>}
             </div>

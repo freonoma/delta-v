@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   eligibleQuota, featuredQuota, hiddenLowQuota, miniLimits,
-  quotaPercent, remainingPercent, usedPercent, wholePercent,
+  quotaPercent, remainingPercent, usageCheckWait, usedPercent, wholePercent,
 } from "./usage.ts";
 
 const now = 1_800_000_000;
@@ -10,6 +10,24 @@ const quota = (id, used = 0.3, overrides = {}) => ({
   id, label: id, kind: "quota", used_fraction: used, resets_at: now + 3_600,
   window_seconds: 18_000, provenance: "official", enabled: true,
   amount: null, detail: null, ...overrides,
+});
+
+test("usage checks remain pending when the retry deadline passes or is unknown", () => {
+  for (const retryAt of [null, now - 1, now, NaN, Infinity, -Infinity]) {
+    assert.equal(usageCheckWait(retryAt, now), "Waiting for the next usage check");
+  }
+});
+
+test("a future retry includes the remaining wait and its local date and time", () => {
+  const retryAt = now + 25 * 3600;
+  assert.equal(usageCheckWait(retryAt, now), `Checks can resume in 1d 1h (${new Date(retryAt * 1000).toLocaleString()})`);
+  assert.match(usageCheckWait(now + 1, now), /^Checks can resume in 1m \(/);
+});
+
+test("retry deadlines outside the Date range keep the wait without an invalid date", () => {
+  const message = usageCheckWait(9_223_372_036_854_776_000, now);
+  assert.match(message, /^Checks can resume in \d+d \d+h$/);
+  assert.ok(!message.includes("Invalid Date"));
 });
 
 test("a missing first selection does not promote the second window", () => {

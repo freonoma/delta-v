@@ -160,7 +160,9 @@ Delta-V asks the provider for your account's usage reading. It does not submit m
 
 **Why does it say Stale or ask me to wait?**
 
-Delta-V could not get a fresh reading, so it shows the last one with a stale label. If the provider asks it to wait, a countdown shows when it can try again. It retries automatically, and Check now respects the same wait. A `?` beside a menu bar percentage means that reading is stale; `?` on its own means no usable percentage is available.
+Delta-V could not get a fresh reading, so it shows the last one with a stale label. **Checks limited** means the provider is temporarily limiting usage checks. This does not tell you whether your subscription allowance is exhausted. The remaining wait and local date and time show when checks can resume. Automatic checks can happen later if the app is paused or that provider is not being monitored. **Check now** respects the same wait. Once it ends, Delta-V still needs a successful reading to update your usage.
+
+A `?` beside a menu bar percentage means that reading is stale; `?` on its own means no usable percentage is available. The menu bar tooltip names any visible connected provider whose usage checks are limited. Open the panel for check timing and details.
 
 Restarting preserves Claude's wait, but the last usage reading still stays in memory only. After restarting during a wait, a `?` can remain until a new reading arrives. If the saved wait cannot be read, Delta-V shows a warning and pauses Claude checks for five minutes. A save failure keeps the current in-memory wait and warns that restarting may lose it or restore an older wait.
 
