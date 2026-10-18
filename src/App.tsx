@@ -6,6 +6,9 @@ import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, Reconnec
 import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistoryView } from "./HistoryView";
+import { UpcomingResets } from "./UpcomingResets";
+import { upcomingResets } from "./upcoming-resets";
+import "./UpcomingResets.css";
 import { openSettings } from "./settings-navigation";
 import { ProviderFeedback } from "./AccountControls";
 import { Icon } from "./Icon";
@@ -206,9 +209,11 @@ export default function App() {
   } = useAppController();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [resetsOpen, setResetsOpen] = useState(false);
   const [showDragHint, setShowDragHint] = useState(false);
   const [keyboardNavigation, setKeyboardNavigation] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
+  const resetsButton = useRef<HTMLButtonElement>(null);
   const focusFrame = useRef(0);
   const content = useRef<HTMLDivElement>(null);
   const lastSize = useRef("");
@@ -229,6 +234,7 @@ export default function App() {
     void listen("popover-reset", () => {
       if (!disposed) {
         setExpanded(false);
+        setResetsOpen(false);
         setHistoryOpen(false);
         setShowDragHint(false);
         setKeyboardNavigation(false);
@@ -306,6 +312,11 @@ export default function App() {
       if (event.key !== "Escape" || saving || panelCommandPending.current) return;
       if (historyOpen) { setHistoryOpen(false); return; }
       if (miniActive && miniExpanded) { void changePanelPreferences({ expanded: false }); return; }
+      if (!miniActive && resetsOpen) {
+        setResetsOpen(false);
+        resetsButton.current?.focus({ preventScroll: true });
+        return;
+      }
       if (!miniActive && expanded) { setExpanded(false); return; }
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
@@ -314,7 +325,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [historyOpen, expanded, miniActive, miniExpanded, saving, changePanelPreferences, panelCommandPending, setError]);
+  }, [historyOpen, expanded, resetsOpen, miniActive, miniExpanded, saving, changePanelPreferences, panelCommandPending, setError]);
 
   async function togglePin() {
     if (panelBusy) return;
@@ -329,6 +340,9 @@ export default function App() {
   }
 
   const displayedProviders = state?.providers.filter((provider) => selection === "both" || selection === provider.id) ?? [];
+  const resetRows = state ? upcomingResets(
+    displayedProviders.filter((provider) => !pendingRecovery[provider.id]), state.settings, now,
+  ) : [];
   const refreshing = displayedProviders.some((provider) => provider.refreshing);
   const recovering = state?.providers.some((provider) => provider.recovery !== null) || Object.keys(pendingRecovery).length > 0;
   const changingConnection = Object.keys(pendingConnection).length > 0;
@@ -453,6 +467,7 @@ export default function App() {
               <button className="expand-button" disabled={panelBusy} onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls="provider-limits">
                 {expanded ? "Show less" : "Show more"}<Icon name="chevron" />
               </button>
+              <UpcomingResets rows={resetRows} now={now} open={resetsOpen} onToggle={() => setResetsOpen(!resetsOpen)} buttonRef={resetsButton} />
             </>
           ) : (
             <div className="app-loading">

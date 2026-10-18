@@ -27,13 +27,42 @@ const previewIssues: ProviderIssue[] = [
   { kind: "recovery", message: "The CLI could not finish reconnecting." },
 ];
 
+function resetPreviewLimits(limits: Limit[], mode: string | null, now: number): Limit[] {
+  if (mode === "empty") return limits.filter((limit) => limit.kind !== "quota");
+  return limits.map((limit, index) => {
+    if (limit.kind !== "quota") return limit;
+    switch (mode) {
+      case "elapsed": return { ...limit, resets_at: now - 60 * (index + 1) };
+      case "missing": return { ...limit, resets_at: null };
+      case "soon": return { ...limit, resets_at: now + (index === 0 ? 10 : 120 + index * 60) };
+      case "long": return { ...limit, label: `${limit.label} · Shared allowance for extended reasoning and large codebase reviews` };
+      case "mixed": {
+        // Keep simultaneous reports separate and preserve unavailable reset states.
+        const resets: Record<string, number | null> = {
+          session: now + 3600,
+          weekly: now - 60,
+          seven_day_sonnet: null,
+          "rate_limit:primary_window": now + 3600,
+          "rate_limit:secondary_window": now + 86400,
+          "spark:primary": now + 3600,
+          "spark:secondary": Number.MAX_SAFE_INTEGER,
+        };
+        const resetAt = resets[limit.id];
+        return { ...limit, resets_at: resetAt === undefined ? limit.resets_at : resetAt };
+      }
+      default: return limit;
+    }
+  });
+}
+
 export function createPreview(search = ""): AppState {
   const now = Math.floor(Date.now() / 1000);
   const parameters = new URLSearchParams(search);
   const issue = previewIssues.find((candidate) => candidate.kind === parameters.get("issue"));
   const issueProvider = parameters.get("provider") ?? "claude";
   const disconnected = parameters.get("disconnected");
-  const stale = parameters.get("stale");
+  const resets = parameters.get("resets");
+  const stale = parameters.get("stale") ?? (resets === "mixed" ? "codex" : null);
   const theme = parameters.get("theme");
   const codexFiveHour = parameters.get("codex_5h") === "1";
   const quota = (id: string, label: string, used: number, duration: number, reset: number): Limit => ({
@@ -46,7 +75,7 @@ export function createPreview(search = ""): AppState {
     const error = enabled && (id === issueProvider || issueProvider === "both") && issue
       ? issue : cached ? previewIssues.find((candidate) => candidate.kind === "network") ?? null : null;
     return {
-      id, snapshot: !enabled || (error && !cached) ? null : { provider: id, limits, plan, fetched_at: now - (cached ? 480 : 24), warnings: [] },
+      id, snapshot: !enabled || (error && !cached) ? null : { provider: id, limits: resetPreviewLimits(limits, resets, now), plan, fetched_at: now - (cached ? 480 : 24), warnings: [] },
       error, recovery: null, refreshing: error?.kind === "rate_limited" && parameters.get("retry") === "checking", stale: error !== null,
       next_retry_at: error?.kind === "rate_limited" ? now + (["ready", "checking"].includes(parameters.get("retry") ?? "") ? -1 : 3600) : null,
     };
