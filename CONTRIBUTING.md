@@ -42,6 +42,21 @@ For connection help, use `?issue=credential_access&provider=both` or `?issue=con
 
 For usage-check waits, use `?issue=rate_limited&provider=claude`, with `&stale=claude` to keep a cached reading. Add `&retry=ready` for an elapsed wait or `&retry=checking` for a check in progress. Check the panel, mini view and Settings Accounts in both appearances (`&theme=light` or `&theme=dark`), including a cached quota past its reset with `&expired=1`. A wait ending must not imply a successful reading or refilled allowance. Check the named-provider menu bar tooltip separately in macOS.
 
+For Upcoming resets, open `http://127.0.0.1:1420/?resets=mixed`, then expand **Upcoming resets** below **Show more**. These fixtures use synthetic quota readings:
+
+| `resets` value | Preview |
+| --- | --- |
+| `mixed` | Simultaneous future times, an elapsed time, a missing time and an invalid date. Codex uses a stale cached reading by default. |
+| `elapsed` | All quota reset times have passed. |
+| `missing` | All quota reset times are missing. |
+| `empty` | No quota entries. |
+| `soon` | The first quota for each provider reaches its reported reset time after ten seconds. |
+| `long` | Long quota labels for wrapping checks. |
+
+Combine these with `&theme=light` or `&theme=dark`, `&stale=claude`, `&stale=codex` or `&stale=both`, and `&disconnected=claude`, `&disconnected=codex` or `&disconnected=both`. An explicit `stale` value replaces the `mixed` fixture's default. Use the panel picker to check Claude, Codex and Both layouts; `provider` selects the target of an `issue` fixture, not the panel layout. Add `&codex_5h=1` to include a second main Codex quota window.
+
+Check Enter and Space on the disclosure button, and Escape closing the list and returning focus to it before expanded provider details close. Check **Show more** independently, long labels in a narrow panel, and returning from History and mini view. With `resets=soon`, the elapsed entry must retain its reported date and become **Awaiting update** without implying a refill. With `?resets=mixed&issue=rate_limited&provider=codex&retry=ready`, an elapsed service wait must leave the cached entries stale. Native checks cover panel sizing and scrolling, focus, returning from Settings with the list open, and dismissing the panel and reopening it from ΔV with the list closed. Include screenshots in both appearances.
+
 For sign-in focus, use `?issue=sign_in&provider=both` and `?issue=authentication&provider=both`, including in Settings with `&view=settings&section=accounts`. Open each provider's confirmation with Enter or Space: Cancel receives focus, and Cancel or Escape returns it to the same sign-in button without closing the surrounding view. Continue moves focus to that provider's connection status while the existing sign-in action starts. Check healthy **Sign in again** in Accounts too. Ordinary updates must not move focus. Preview sign-in actions are simulated; verify native focus separately without changing accounts.
 
 For field validation, use `?view=settings&section=display`. Enter a threshold outside 0 to 100 or a refresh interval outside 30 to 900, then choose **Save changes**. The first invalid field receives focus and a warning border, and its accessible description contains the footer error. Editing or discarding clears the error and field marker. Check saving from another section and from the unsaved-changes dialog too, then verify keyboard focus and VoiceOver in the macOS app.
@@ -69,6 +84,14 @@ Routine Claude requests must start at least 300 seconds apart within an app run.
 `cooldown.rs` stores Claude service waits in `~/.config/delta-v/claude-cooldown.toml`, independently of history. Persist only typed rate-limit, access-denied and service errors with their observation time and effective retry deadline, including the existing minimum spacing. Never save credentials, account identifiers, raw messages, snapshots or ordinary network/authentication backoff. Restore before polling starts; disconnecting and reconnecting must preserve the wait. Include late responses after cancellation or a connection change. Keep tiny atomic writes ordered under the runtime lock. This does not coordinate separate running copies.
 
 Use temporary files and synthetic clocks to check restart, expiry, malformed data, failed writes and clock changes. A backward clock adjustment before the saved observation time rebases the wait once to its original duration. Preserve unsupported future-version files. Read failures without a recoverable wait produce a visible warning and a five-minute Claude pause; write failures leave the current wait intact. In browser preview, add `&cooldown_storage=error` to a connection-error fixture, including Settings, to check the storage warning without touching a real cooldown file.
+
+### Upcoming resets
+
+[`src/upcoming-resets.ts`](src/upcoming-resets.ts) projects current snapshots into display rows using an explicit clock in Unix seconds. Keep it pure and include enabled official quota windows for the selected, connected providers, even when usage is missing or the reset time has passed. Skip providers without snapshots or undergoing sign-in recovery. The caller also excludes pending recovery actions immediately.
+
+Preserve quota identity, window length, reported reset time and reading time. Keep future, elapsed, missing and invalid reset states distinct, with stale status independent of timing. A provider error makes a cached entry stale even if the reset time is still in the future. Sort future times soonest first, elapsed times most recent first, then missing and invalid times, with deterministic ordering for ties. Do not merge simultaneous windows, filter through percentage eligibility, substitute a service retry deadline or calculate a later reset from the window length.
+
+The list uses the existing display clock and adds no polling or history dependency. Crossing a reset boundary changes only its timing state; it cannot establish that allowance has returned. Keep the [display wording](README.md#upcoming-resets) consistent with this distinction. [`src/upcoming-resets.test.mjs`](src/upcoming-resets.test.mjs), included in `npm test`, covers filtering, ordering, stale and unavailable states, boundary times and input immutability with synthetic data.
 
 ### History calculations
 

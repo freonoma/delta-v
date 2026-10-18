@@ -86,11 +86,11 @@ Account actions take effect immediately, without **Save changes**. Discarding di
 
 Click ΔV to open the usage panel. The **Claude / Codex / Both** picker chooses which providers you see. **Show more** reveals additional windows, credits, and provider details. Clicking outside closes the panel; the next opening starts compact again.
 
-Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes History or expanded details first, then hides the panel.
+Click the **pin** beside the provider picker to keep the panel open above other windows. Drag its header to move it. Click the pin again to return it below the menu bar icon. While pinned, clicking ΔV hides or shows the panel in the same place. Escape closes History, Upcoming resets or expanded details before hiding the panel.
 
 Choose **Settings** in the panel, right-click ΔV and choose **Settings**, or press **Cmd+,** while Delta-V is active. The same Settings window comes forward each time. Its sidebar has **Display & usage**, **Accounts**, **History**, **Notifications**, and **App** sections. Switching sections keeps unsaved display changes. Reopening Settings restores the last section until you quit Delta-V.
 
-Opening Settings from the panel keeps your place. Closing it returns to the same usage or History view, including expanded details and scroll position. **Back to panel** also returns there. If you opened Settings from the menu while the panel was hidden, closing Settings leaves the panel hidden.
+Opening Settings from the panel keeps your place. Closing it returns to the same usage or History view, including Upcoming resets, expanded details and scroll position. **Back to panel** also returns there. If you opened Settings from the menu while the panel was hidden, closing Settings leaves the panel hidden.
 
 Use **Save changes** to apply display preferences, or **Discard changes** to restore the saved values. Closing Settings with the red close button, **Cmd+W**, or Escape asks what to do if display changes are unsaved. Quitting Delta-V does too. Account, history, notification and launch-at-login actions apply immediately and are not undone by discarding display changes.
 
@@ -117,6 +117,23 @@ Usage updates automatically. **Check now** requests the latest reading; it canno
 Routine Claude checks stay at least five minutes apart, including **Check now**, waking your Mac, and changing the provider selection. Automatic checks also follow a longer saved refresh interval and idle slowdown. **Check now** can request an earlier check, subject to the five-minute minimum and any service cooldown. Codex keeps its existing refresh timing. Explicit sign-in recovery can check sooner after a new sign-in; it still respects service cooldowns.
 
 Claude's service waits are saved locally and restored before checking usage after a restart. This includes the fallback wait when a service error supplies no useful retry time. Disconnecting Claude or changing its sign-in does not bypass an outstanding wait. An expired wait allows checking again; it does not restore a usage reading. Codex waits remain in memory.
+
+### Upcoming resets
+
+Open **Upcoming resets**, below **Show more** in the full usage panel, to see reported quota reset times for the selected, connected providers. It includes quota windows hidden by your compact-view choices. Credits and other balances are not included. Opening the list uses the current readings without requesting another check or requiring history recording.
+
+Future times appear first, soonest first, followed by elapsed and unavailable times. Dates use your Mac's current time zone. Each window keeps its own entry, even when several report the same time.
+
+| What you see | What it means |
+| --- | --- |
+| A countdown, such as **In 5m**, and a date | The provider reported a future reset time. The countdown is not a guarantee that allowance will return then. |
+| **Awaiting update** and a date | The reported time has passed. A fresh usage reading is needed to confirm whether allowance has returned. |
+| **No reset time reported** | The reading did not include a reset time for this window. |
+| **Reset time unavailable** | The reported value cannot be displayed as a valid date. |
+
+**Stale** and the age of the last reading can appear alongside any of these states. A stale entry keeps its reported time; neither a countdown reaching zero nor a usage-check wait ending confirms a refill. Providers without a reading, disconnected providers and providers undergoing sign-in recovery have no entries. If no entries remain, the list says no quota reset information is available.
+
+Use Enter or Space on **Upcoming resets** to open or close it. Escape closes an open list and returns focus to its button before closing expanded provider details or hiding the panel. **Show more** works independently. Returning from History, mini view or Settings keeps the list's open state. Dismissing the panel and reopening it from ΔV starts with the list closed. The list is available only in the full usage view.
 
 ### Low-allowance notifications
 
@@ -168,7 +185,7 @@ Restarting preserves Claude's wait, but the last usage reading still stays in me
 
 **Why hasn't the percentage changed at the reset time?**
 
-Delta-V waits for a new reading from the provider before showing a refill. A countdown reaching zero does not confirm that the provider has reset the window yet.
+Delta-V waits for a new reading from the provider before showing a refill. A countdown reaching zero does not confirm that the provider has reset the window yet. [Upcoming resets](#upcoming-resets) keeps the reported date and shows **Awaiting update** after it passes.
 
 **Do Claude Code and Codex need to stay open?**
 
