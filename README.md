@@ -29,7 +29,7 @@ Open **Settings → App → Updates** to see your installed version, then choose
 
 The result and the time of the last successful check stay available until you quit Delta-V. If a later check fails, the earlier result is labelled as a previous result. A failed check never means you have the latest release. If GitHub asks Delta-V to wait, the next permitted check time appears; Delta-V does not retry automatically. **View releases on GitHub** remains available and opens the releases page in your browser.
 
-Updates are installed manually. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings and usage history in place.
+Updates are installed manually. Download the newer DMG from the releases page, quit Delta-V, and repeat the installation steps above. Replacing the app leaves your saved settings, pending availability alerts and usage history in place.
 
 ### Build from source
 
@@ -135,9 +135,11 @@ Future times appear first, soonest first, followed by elapsed and unavailable ti
 
 Use Enter or Space on **Upcoming resets** to open or close it. Escape closes an open list and returns focus to its button before closing expanded provider details or hiding the panel. **Show more** works independently. Returning from History, mini view or Settings keeps the list's open state. Dismissing the panel and reopening it from ΔV starts with the list closed. The list is available only in the full usage view.
 
+For a one-time alert after a fresh reading confirms remaining allowance, see [Notify when available](#notify-when-available).
+
 ### Low-allowance notifications
 
-Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low allowance threshold. This starts off. Delta-V requests macOS permission only when you enable it. Notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
+Open **Settings → Notifications** and turn on **Notify when allowance is low** to receive a local macOS alert when remaining allowance crosses below your saved low allowance threshold. This starts off. Enabling it requests macOS permission if needed. Low-allowance notifications monitor both connected providers, including one hidden by the panel picker, and do not require history recording.
 
 The threshold comes from **Display & usage → Low allowance threshold** and always refers to remaining allowance. Highlighting and enabled alerts use the same saved threshold. Choose **Save changes** before a threshold change affects either. A threshold of 0 prevents low-allowance alerts.
 
@@ -146,6 +148,20 @@ The first valid reading stays quiet, even if already low. This applies after ena
 **Send test notification** asks macOS to show an example without changing your usage. A successful request means macOS accepted it; Focus and system notification settings can still hide the banner. If permission is blocked, choose **Open macOS notification settings**, then allow Delta-V under **System Settings → Notifications**. Delta-V reads permission again when you return. Notification controls apply immediately, and turning them off remains available if a permission check fails.
 
 Alerts have no sound and include the provider, usage-window names and remaining threshold. macOS controls where notification previews appear. Clicking an alert opens usage without discarding unsaved Settings changes. Ordinary development executables cannot send notifications; use a built `Delta-V.app` to check this feature.
+
+### Notify when available
+
+**Notify when available** appears beside an eligible, fully exhausted quota in the full usage panel. It is hidden while that quota still has allowance. The provider must report it as fully used in a fresh reading with a future reset time; a displayed percentage rounded to 0% remaining is not enough. Use **Show more** for quota windows hidden by your compact-view choices. Credits, stale readings and windows with missing or elapsed reset times cannot start an alert.
+
+Choose the button to save a one-time alert for that quota and account. macOS asks for notification permission if needed. If you see **Verify account to notify**, choose it and wait for the next scheduled usage check. Once the account is verified, choose **Notify when available** separately to save the alert. Verification alone never saves one. **Cancel verification**, or Escape in the usage panel, stops that preparation.
+
+Delta-V waits for a newer, fresh reading from the same account confirming remaining allowance for the same quota window. A reported reset time passing, a service wait ending, or another quota recovering cannot trigger it. The alert identifies the recovered quota and can mention other windows still reported as exhausted; it does not guarantee that every quota allows work.
+
+These alerts work independently of low-allowance notifications and history recording. Pending alerts survive app restarts and keep their original account. Disconnecting or sign-in recovery pauses monitoring for that provider; switching accounts leaves an alert waiting for its original account. It can complete after that account is connected and verified again. Hidden providers with pending alerts still follow the usual polling schedule, including idle slowdown, screen-lock pauses and service waits. Delta-V must be running to check.
+
+Open **Settings → Notifications → Notify when available** to review or cancel saved alerts, including those for hidden or disconnected providers and earlier accounts. **Cancel alert** is also available beside a matching quota in the panel. These actions apply immediately without **Save changes**. **Check alert status** rereads saved alerts and macOS permission; it does not request a usage check.
+
+If permission is blocked or cannot be read, saved alerts stay pending and can still be cancelled. After permission is restored, another accepted usage reading must confirm remaining allowance. Once recovery is confirmed with permission available, Delta-V removes the saved alert before requesting delivery, so restarting cannot replay it. Delivery failure or quitting at that point can therefore lose the alert. Alerts have no sound, and Focus or macOS settings may hide them.
 
 ### Local history
 
@@ -214,7 +230,7 @@ Routine usage checks contact these endpoints:
 - [Anthropic usage](https://api.anthropic.com/api/oauth/usage)
 - [OpenAI usage](https://chatgpt.com/backend-api/wham/usage)
 
-With history recording or low-allowance notifications enabled, Delta-V also uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs. Notifications do not enable history recording.
+Delta-V uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate when history recording or low-allowance notifications are enabled. It also uses this endpoint while verifying an account for an availability alert or monitoring a pending Claude alert. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs. Notifications do not enable history recording.
 
 Each provider receives its own saved access token with the request. OpenAI also receives the selected account ID. Credentials stay in the Rust backend and are never passed to the usage panel. Delta-V does not read browser cookies or write credentials.
 
@@ -222,7 +238,9 @@ Choosing **Check for updates** makes an unauthenticated request to [GitHub's lat
 
 When you choose **Reconnect** or **Sign in**, Delta-V starts the official client in a temporary folder. That client handles renewal, browser login, and saving its own credentials. It can contact the provider's authentication, configuration, and other startup services as well as the usage endpoints above. Delta-V disables optional telemetry and integrations for these helpers and does not send a model prompt. Recovery only runs when you ask for it.
 
-Delta-V's usage reader does not read conversations, project files, or session logs. With history off, new usage readings stay in memory and are lost when you quit. Optional history saves timestamps, quota labels and IDs, fractions used, reset times, window lengths, provenance, and an opaque account key. It does not save names, email addresses, tokens, or raw API responses. Settings and any recorded history stay on your Mac.
+Delta-V's usage reader does not read conversations, project files, or session logs. With history off, usage snapshots stay in memory and are lost when you quit. Optional history saves timestamps, quota labels and IDs, fractions used, reset times, window lengths, provenance, and an opaque account key. It does not save names, email addresses, tokens, or raw API responses. Settings and any recorded history stay on your Mac.
+
+Pending availability alerts save their provider, quota ID and label, window length, opaque account key, creation time and last-observation time, plus local record identifiers. This small record is separate from history and contains no usage percentages, reset times, credentials, names, email addresses or raw responses. Cancelling or completing an alert removes its pending record. Turning off or clearing history does not cancel availability alerts.
 
 Claude's saved cooldown contains only the time the wait was observed, its retry deadline and a typed service-error reason, including an HTTP status where applicable. This is saved even with history off and contains no usage readings, credentials or account identifiers. The wait applies to Claude usage checks in this Delta-V profile, including after a sign-in change.
 
@@ -241,6 +259,7 @@ The app reads these locations:
 | `~/.config/delta-v/config.toml` | Delta-V settings |
 | `~/.config/delta-v/panel.toml` | Pinned view, mini layout and screen position |
 | `~/.config/delta-v/claude-cooldown.toml` | Claude's saved usage-check wait |
+| `~/.config/delta-v/availability-watches.json` | Pending one-time availability alerts |
 | `~/.local/share/delta-v/history/usage-YYYY-MM-DD.jsonl` | Saved quota readings, if history has been enabled |
 | `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/` | Check for managed Claude settings before running renewal |
 | `/Library/Managed Preferences/com.anthropic.claudecode.plist` and `/Library/Managed Preferences/<username>/com.anthropic.claudecode.plist` | Check for managed Claude preferences before running renewal |
@@ -263,6 +282,8 @@ Claude's sign-in actions require absolute custom directory paths. Remove empty d
 Delta-V writes `~/.config/delta-v/config.toml`, using `~/.config/delta-v/config.toml.tmp` while saving. Panel preferences and position are saved in `~/.config/delta-v/panel.toml`, with `panel.toml.<process>.<sequence>.tmp` files in the same directory while saving. It does not keep a separate copy of your credentials.
 
 Claude cooldown updates use `claude-cooldown.toml.<process>.<sequence>.tmp` in the same directory before replacing `claude-cooldown.toml`. A successful usage check clears the saved wait. If the system clock moves behind the recorded observation time, the restored wait lasts at most its originally recorded duration.
+
+Availability alerts use `~/.config/delta-v/availability-watches.json`, with private temporary files and a coordination lock in the same directory while saving. Read, save or format errors appear in the notification controls. An unreadable file is not treated as an empty alert list, and unsupported newer files are preserved.
 
 Recorded history uses daily `usage-YYYY-MM-DD.jsonl` files in `~/.local/share/delta-v/history/`, grouped by UTC date. The folder is created with access limited to your macOS user, and so are its files. Retention removes readings older than the selected number of 24-hour days when Delta-V runs, including while recording is off. While rewriting a day's file, the app uses `usage-YYYY-MM-DD.<process>.<sequence>.tmp` in the same folder and cleans up interrupted temporary files on the next maintenance pass. Clear history removes these files too; it leaves unrelated files alone.
 

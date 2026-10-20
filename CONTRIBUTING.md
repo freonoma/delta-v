@@ -107,6 +107,8 @@ PNG exports reuse the chart geometry, with fixed dimensions and no account keys.
 
 ### Notifications
 
+#### Low-allowance notifications
+
 `src-tauri/src/notifications.rs` contains the in-memory low-allowance evaluator. The runtime feeds it accepted successful responses, an independently verified opaque account key, and the current polling cadence's freshness allowance. The evaluator does not read credentials, request identity, write files, or depend on history recording.
 
 The first eligible reading is a silent baseline, even if already low. A later reading must cross from at or above the threshold to below it. Compare remaining allowance at the same precision as highlighting, not rounded display percentages. Evaluate each enabled official quota independently; exclude expired, reset-less, invalid, positional, and ambiguous duplicate limits. Errors must not replay cached readings as new observations.
@@ -115,7 +117,7 @@ Keep duplicate prevention per provider, account and quota in memory. A period ca
 
 `notification_delivery.rs` checks macOS permission without prompting, evaluates under the runtime lock, then delivers outside that lock. Tickets reject obsolete readings after policy, connection or recovery changes. Notifications start off and monitor both connected providers when enabled, including a provider hidden by the panel picker. Claude's verified account lookup works independently of history recording; enabling notifications does not enable history writes.
 
-`platform/notifications.rs` uses UserNotifications for local alerts without sound or badges. Only an explicit enable command from the Settings window can request permission. Permission reads and automatic checks never prompt. A delivery failure is reported and is not retried with an old reading. Clicking an alert shows usage without discarding a Settings draft. The notification includes the provider, quota labels and remaining threshold, never account identifiers or credentials.
+`platform/notifications.rs` uses UserNotifications for local alerts without sound or badges. Only explicitly enabling low-allowance notifications or saving an availability watch can request permission. Permission reads, account preparation and automatic checks never prompt. A delivery failure is reported and is not retried with an old reading. Clicking an alert shows usage without discarding a Settings draft. A low-allowance notification includes the provider, quota labels and remaining threshold, never account identifiers or credentials.
 
 **Settings → Notifications** supports permission status, enabling/disabling, a test notification and opening macOS notification settings. The saved **Display & usage → Low allowance threshold** controls highlighting and enabled alerts; an unsaved draft affects neither. It always refers to remaining allowance, regardless of the percentage display mode, and uses the existing `threshold` configuration key. Notification choices apply immediately and must survive Save, Discard, section changes and closing Settings. Test notifications require an enabled preference and existing alert permission. macOS accepting a request does not prove a banner appeared; Focus and system presentation settings can suppress it.
 
@@ -130,6 +132,39 @@ APPLE_SIGNING_IDENTITY=- npm run tauri -- build --debug --bundles app -- --locke
 ```
 
 Quit any running copy, then open `src-tauri/target/debug/bundle/macos/Delta-V.app`. This ad-hoc signed app uses your normal Delta-V settings and saved CLI sign-ins. It is not notarized.
+
+#### Availability watches
+
+[`src-tauri/src/notifications/availability.rs`](src-tauri/src/notifications/availability.rs) evaluates explicit, one-time watches independently of polling, storage and delivery. Arming requires an enabled official quota with a stable, unambiguous ID, future reset, fresh accepted reading and verified opaque account key. A window length may be absent, but must be nonzero if supplied. Its reported `used_fraction` must be exactly `1.0`; a display rounded to 0% remaining is insufficient. A stale or elapsed sibling quota must not invalidate an otherwise eligible target.
+
+Bind each watch to its provider, account, quota ID and window length. Only a newer accepted reading from that account with positive remaining allowance and a future reset can complete it. Preserve pending state through unknown or different accounts, unavailable quotas, errors and elapsed reset times. Reject out-of-order readings and never infer recovery from a countdown, cooldown or another quota. Notification wording names the recovered quota without claiming provider-wide readiness.
+
+The runtime publishes a `reading_id` with each accepted provider reading. [`src/availability-state.ts`](src/availability-state.ts) matches it against backend readiness before offering an action. The arm command must validate the displayed reading before checking permission and revalidate its account, quota and connection after permission awaits. Identity preparation joins ordinary polling without advancing its next check. It does not arm a watch; a separate explicit action is required once identity is verified.
+
+[`src-tauri/src/availability_watches.rs`](src-tauri/src/availability_watches.rs) coordinates pending state with [`availability_store.rs`](src-tauri/src/availability_store.rs). Persist only the minimal fields described in [Privacy](README.md#privacy), in `~/.config/delta-v/availability-watches.json`. Keep bounded, private atomic writes, conflict checks and format validation; preserve unsafe, unreadable or unsupported files rather than replacing them with an empty list. Persist watch consumption before delivery. A write failure suppresses delivery; if replacement happened before directory sync failed, adopt that state without sending or replaying it. A later delivery failure can lose an alert but must not restore it.
+
+Watches remain independent of history recording and the low-allowance toggle. Pending watches keep connected hidden providers in ordinary polling, with normal minimum spacing, idle slowdown, lock pauses and service cooldowns. Disconnect and recovery pause evaluation without deleting or retargeting watches. Denied or unreadable notification permission leaves them pending. Restoring permission needs a new accepted reading, not replay of a cached recovery. Cancellation must remain available without permission.
+
+[`src/useAvailabilityWatches.ts`](src/useAvailabilityWatches.ts) rereads state after both successful and failed mutations, since a reported save failure may occur after replacement. Preserve known cancellation targets when a status read fails and never present that failure as an empty saved list. [`src/AvailabilityControls.tsx`](src/AvailabilityControls.tsx) offers actions in the full usage panel and lists all saved watches in Settings. Verification cancellation must remain reachable if its quota disappears, and late preparation responses must be cleaned up after dismissal without clearing a newer preparation.
+
+For a synthetic preview, open `http://127.0.0.1:1420/?watches=ready`. The first quota of each provider is fully exhausted. Low-allowance alerts start off unless an explicit `notifications` fixture overrides that preview setting. Add `&view=settings&section=notifications` to inspect saved alerts.
+
+| `watches` value | Preview |
+| --- | --- |
+| `ready` | Eligible quotas with verified accounts and no saved alerts. |
+| `identity` | Verification is needed. Add `&watches_verify=ready`, choose **Verify account to notify**, then **Check alert status** to simulate verification. Saving still requires **Notify when available**. |
+| `pending` | Saved alerts for both providers. |
+| `other_account` | Saved alerts waiting for their original accounts. |
+| `denied`, `unavailable`, `read_error` | Saved alerts with blocked, unavailable or unreadable notification permission. Cancellation remains available. |
+| `save_error` | Saving or cancelling fails and leaves saved state unchanged. |
+| `delivery_error` | Feedback from a previous delivery failure. |
+| `long` | Long quota and saved-alert labels. |
+
+Use `watches_arm_result`, `watches_cancel_result`, `watches_prepare_result`, or `watches_clear_result` with `error` or `postcommit_error` to check failure readback. `watches_arm_result=denied` simulates refusal when arming; `watches_read_result=error` fails a status read. These fixtures keep all changes in memory, send no notifications and reset on reload.
+
+Check light and dark appearances, Claude/Codex/Both layouts, long labels, Tab/Enter/Space, Escape cancelling verification, and focus after cancellation removes a control. Combine with `resets=mixed`, `resets=elapsed`, `resets=missing`, `stale=both` and `disconnected=claude` to preserve reset states and prevent ineligible actions. Settings must retain cancellation for hidden, disconnected and earlier-account watches. Native screenshots should cover panel sizing, scrolling and Settings; use a built app for permission and notification checks, and report any unverified behavior.
+
+[`src/availability.test.mjs`](src/availability.test.mjs), included in `npm test`, covers action eligibility, reading identity, preview failures and preparation cleanup. Rust tests use synthetic clocks, accounts, permission values and temporary storage for stale commands, recovery, account changes, restarts, duplicate prevention and write failures. Do not exhaust a real quota or change credentials to produce test states.
 
 ## Checking your work
 
