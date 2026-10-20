@@ -307,6 +307,11 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 - [x] Keep quota history on your Mac, with charts and PNG/CSV exports.
 - [x] Organize settings in a dedicated window.
 - [x] Offer optional low-allowance notifications.
+- [ ] Add optional Claude and Codex mascots, with separate toggles that start off.
+
+Proposed UI direction, not yet implemented: take inspiration from [Clawd Usage WinWidget](https://github.com/Enhed/clawd-usage-winwidget) and [Claudy Usage Mac](https://github.com/juliobianco/claudy-usage-mac). Mascots would accompany the existing usage figures and reset times, with initial states based only on quota readings and their freshness. Keep a static option and respect reduced-motion preferences.
+
+Follow-on candidates include mini-view polish and a small trend chart using existing optional local history. Live session activity would need its own validated data source before the UI could show whether an agent is working or waiting.
 
 Under consideration: API usage and spending in a separate view. API billing would need its own data sources and account setup, and would stay separate from subscription allowances.
 
