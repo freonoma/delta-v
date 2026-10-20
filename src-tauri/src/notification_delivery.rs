@@ -13,7 +13,7 @@ use crate::{
     notifications::{LowAllowance, availability::RecoveredAllowance},
     platform::notifications::{self as native, Authorization, Message, PermissionState},
     providers,
-    runtime::{self, AvailabilityTicket, NotificationTicket, Runtime},
+    runtime::{self, AvailabilityTicket, NotificationTicket, Runtime, WatchProviderStatus},
 };
 
 #[derive(Default)]
@@ -39,6 +39,7 @@ pub struct NotificationStatus {
 #[derive(Serialize)]
 pub struct AvailabilityStatus {
     watches: Vec<WatchSummary>,
+    providers: Vec<WatchProviderStatus>,
     permission: Option<PermissionState>,
     error: Option<String>,
 }
@@ -53,6 +54,7 @@ pub async fn availability_state(app: &AppHandle) -> Result<AvailabilityStatus, S
     };
     Ok(AvailabilityStatus {
         watches: watches.watches,
+        providers: watches.providers,
         permission,
         error: watches
             .error
@@ -81,12 +83,13 @@ pub async fn arm_availability(
     app: &AppHandle,
     provider: ProviderId,
     limit_id: &str,
+    reading_id: &str,
 ) -> Result<String, String> {
     let delivery = app.state::<Delivery>();
     let mut saved = delivery.actions.lock().await;
     let ticket = app
         .state::<Runtime>()
-        .availability_arm_ticket(provider, limit_id)?;
+        .availability_arm_ticket(provider, limit_id, reading_id)?;
     let mut permission = remember_permission(app, native::state().await)?;
     if should_request_permission(&permission) {
         permission = remember_permission(app, native::request_authorization().await)?;

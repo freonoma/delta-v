@@ -7,6 +7,8 @@ import { AccountsSettings } from "./AccountControls";
 import { DisplaySettings } from "./DisplaySettings";
 import { HistorySettings } from "./HistorySettings";
 import { Notifications, useNotifications } from "./Notifications";
+import { AvailabilitySettings } from "./AvailabilityControls";
+import { useAvailabilityWatches } from "./useAvailabilityWatches";
 import { Startup } from "./Startup";
 import { Updates } from "./Updates";
 import { BrandMark } from "./BrandMark";
@@ -26,7 +28,7 @@ const sectionDescriptions: Record<SettingsSection, string> = {
   display: "Choose usage windows, percentages and appearance.",
   accounts: "Manage the accounts Delta-V checks for usage.",
   history: "Manage the readings saved on this Mac.",
-  notifications: "Choose whether Delta-V alerts you when allowance runs low.",
+  notifications: "Manage low-allowance and one-time availability alerts.",
   app: "Launch at login and check for updates.",
 };
 type CloseIntent = "close" | "back" | "quit";
@@ -74,6 +76,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
     saveDisplayPreferences, savePanelPreferences, updateHistoryPreferences, setProviderEnabled,
     reconnect, cancelReconnect } = controller;
   const notifications = useNotifications(state.settings.notifications_enabled, controller.updateNotificationPreference);
+  const watches = useAvailabilityWatches(state);
   const [form, setForm] = useState(() => {
     const baseline = createSettingsDraft(state.settings, panelPreferences.layout);
     return { baseline, draft: baseline };
@@ -86,7 +89,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
   const operation = useRef(false);
   const pendingClose = useRef<CloseIntent | null>(null);
   const content = useRef<HTMLDivElement>(null);
-  const busy = submitting || saving || panelBusy || notifications.pending;
+  const busy = submitting || saving || panelBusy || notifications.pending || watches.pending;
   const dirty = isSettingsDraftDirty(form.draft, form.baseline);
 
   // Polling and other windows can change saved values while this draft is open.
@@ -202,6 +205,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
               setSection("display");
               window.requestAnimationFrame(() => content.current?.querySelector<HTMLInputElement>('input[name="threshold"]')?.focus());
             }} />
+          <AvailabilitySettings watches={watches} app={state} />
         </section>
         <section role="tabpanel" id="settings-panel-app" aria-labelledby="settings-tab-app" hidden={section !== "app"}>
           {section === "app" && <>
@@ -211,7 +215,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
         </section>
       </div>
       <footer className="settings-window-footer">
-        <p id={validationMessageId} className="settings-save-status" role={validation ? "alert" : "status"}>{validation?.error ?? (notifications.pending ? "Updating notifications…" : busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
+        <p id={validationMessageId} className="settings-save-status" role={validation ? "alert" : "status"}>{validation?.error ?? (notifications.pending || watches.pending ? "Updating notifications…" : busy ? "Saving display changes…" : dirty ? "Unsaved display changes" : savedNotice ? "Display changes saved" : "Only display changes need saving.")}</p>
         <div className="settings-footer-actions">
           <button className="text-button" disabled={busy || !dirty} onClick={discard}>Discard changes</button>
           <button className="primary-button" disabled={busy || !dirty} onClick={() => void save()}>Save changes</button>

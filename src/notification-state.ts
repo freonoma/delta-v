@@ -68,7 +68,15 @@ function previewState(example: string | null, fallbackEnabled = false): Notifica
 }
 
 export function createNotificationPreview(search: string): NotificationStatus {
-  const example = new URLSearchParams(search).get("notifications");
+  const parameters = new URLSearchParams(search);
+  const example = parameters.get("notifications");
+  // Both kinds of alerts share macOS permission, but keep independent opt-ins.
+  if (example === null && parameters.has("watches")) {
+    const watchExample = parameters.get("watches");
+    const sharedPermission = ["denied", "unavailable", "read_error"].includes(watchExample ?? "")
+      ? watchExample : "off";
+    return { ...previewState(sharedPermission), enabled: false };
+  }
   return previewState(example, example === "read_error");
 }
 

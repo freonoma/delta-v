@@ -83,7 +83,7 @@ fn explicit_arm_is_durable_idempotent_and_does_not_expose_account_keys() {
         "1"
     );
     assert_eq!(registry.generation(), 1);
-    let status = fixture.registry().status();
+    let status = fixture.registry().status(|_| None);
     assert_eq!(status.watches.len(), 1);
     assert_eq!(status.watches[0].armed_at, 100);
     let json = serde_json::to_string(&status).unwrap();
@@ -130,8 +130,8 @@ fn uncertain_durability_after_replacement_adopts_consumption_without_delivery() 
         },
     );
     assert!(result.is_err());
-    assert!(registry.status().watches.is_empty());
-    assert!(registry.status().error.is_some());
+    assert!(registry.status(|_| None).watches.is_empty());
+    assert!(registry.status(|_| None).error.is_some());
     assert!(fixture.store().load().unwrap().entries.is_empty());
     assert!(
         registry
@@ -297,8 +297,8 @@ fn write_failure_cannot_arm_or_cancel_or_deliver() {
             .is_err()
     );
     assert_eq!(fixture.store().load().unwrap(), original);
-    assert_eq!(registry.status().watches.len(), 1);
-    assert!(registry.status().error.is_some());
+    assert_eq!(registry.status(|_| None).watches.len(), 1);
+    assert!(registry.status(|_| None).error.is_some());
     fs::remove_dir(&lock).unwrap();
     // A failed observation cannot be retried from an equal or older capture.
     assert!(
@@ -320,7 +320,7 @@ fn write_failure_cannot_arm_or_cancel_or_deliver() {
             .len(),
         1
     );
-    assert!(registry.status().error.is_none());
+    assert!(registry.status(|_| None).error.is_none());
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn invalid_file_fails_closed_without_overwriting_it() {
     let fixture = Fixture::new();
     fs::write(fixture.0.join("watches.json"), b"not a watch store").unwrap();
     let mut registry = fixture.registry();
-    assert!(registry.status().error.is_some());
+    assert!(registry.status(|_| None).error.is_some());
     assert!(
         registry
             .arm(&snapshot(100, 1.0), "session", 100, 60)

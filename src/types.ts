@@ -174,6 +174,7 @@ export interface ProviderSnapshot {
 
 export interface ProviderState {
   id: ProviderId;
+  reading_id?: string | null;
   snapshot: ProviderSnapshot | null;
   error: ProviderIssue | null;
   recovery: RecoveryPhase | null;

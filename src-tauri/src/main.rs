@@ -312,9 +312,10 @@ async fn arm_availability_watch(
     window: tauri::WebviewWindow,
     provider: model::ProviderId,
     limit_id: String,
+    reading_id: String,
 ) -> Result<String, String> {
     require_availability_window(&window)?;
-    notification_delivery::arm_availability(&app, provider, &limit_id).await
+    notification_delivery::arm_availability(&app, provider, &limit_id, &reading_id).await
 }
 
 #[tauri::command]

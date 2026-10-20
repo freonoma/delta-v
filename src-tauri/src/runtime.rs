@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -12,14 +12,14 @@ use tokio::sync::Notify;
 
 use crate::{
     availability_store::Store as AvailabilityStore,
-    availability_watches::{Registry as AvailabilityWatches, WatchStatus},
+    availability_watches::{Registry as AvailabilityWatches, WatchSummary},
     cooldown::{self, Store as CooldownStore},
     credentials,
     history::Retention,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
     notifications::{
         Evaluator, LowAllowance,
-        availability::{RecoveredAllowance, Watch},
+        availability::{ArmReadiness, RecoveredAllowance, Watch, fresh_account_key},
     },
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
@@ -32,6 +32,7 @@ use crate::{
 
 const PROVIDERS: [ProviderId; 2] = [ProviderId::Claude, ProviderId::Codex];
 const CLAUDE_MIN_INTERVAL: i64 = 300;
+static READING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +47,8 @@ pub enum RecoveryStage {
 pub struct ProviderState {
     pub id: ProviderId,
     pub snapshot: Option<ProviderSnapshot>,
+    /// Changes with the accepted reading before it is published to either window.
+    pub reading_id: Option<String>,
     pub error: Option<Issue>,
     pub recovery: Option<RecoveryStage>,
     pub refreshing: bool,
@@ -137,6 +140,27 @@ pub struct AvailabilityArmTicket {
     connection_generation: u64,
 }
 
+pub struct AvailabilityState {
+    pub watches: Vec<WatchSummary>,
+    pub providers: Vec<WatchProviderStatus>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct WatchProviderStatus {
+    pub provider: ProviderId,
+    pub reading_id: Option<String>,
+    pub preparing: bool,
+    pub quotas: Vec<WatchQuotaStatus>,
+}
+
+#[derive(Serialize)]
+pub struct WatchQuotaStatus {
+    pub limit_id: String,
+    pub window_seconds: Option<u64>,
+    pub readiness: ArmReadiness,
+}
+
 impl Inner {
     fn snapshot(&mut self) -> AppState {
         self.view.revision = self.view.revision.saturating_add(1);
@@ -178,6 +202,7 @@ impl Runtime {
                     .map(|id| ProviderState {
                         id,
                         snapshot: None,
+                        reading_id: None,
                         error: None,
                         recovery: None,
                         refreshing: false,
@@ -276,13 +301,13 @@ impl Runtime {
         })
     }
 
-    pub fn availability_state(&self) -> Result<WatchStatus, String> {
+    pub fn availability_state(&self) -> Result<AvailabilityState, String> {
         let inner = self
             .inner
             .lock()
             .map_err(|_| "Could not read availability watches.")?;
         self.require_running()?;
-        Ok(inner.availability.status())
+        Ok(availability_state(&inner, providers::now()))
     }
 
     pub fn prepare_availability_watch(&self, provider: ProviderId) -> Result<(), String> {
@@ -313,13 +338,14 @@ impl Runtime {
         &self,
         provider: ProviderId,
         limit_id: &str,
+        reading_id: &str,
     ) -> Result<AvailabilityArmTicket, String> {
         let inner = self
             .inner
             .lock()
             .map_err(|_| "Could not prepare an availability watch.")?;
         self.require_running()?;
-        availability_arm_ticket(&inner, provider, limit_id, providers::now())
+        availability_arm_ticket(&inner, provider, limit_id, reading_id, providers::now())
     }
 
     pub fn arm_availability_watch(&self, ticket: &AvailabilityArmTicket) -> Result<String, String> {
@@ -558,8 +584,18 @@ fn availability_arm_ticket(
     inner: &Inner,
     provider: ProviderId,
     limit_id: &str,
+    reading_id: &str,
     now: i64,
 ) -> Result<AvailabilityArmTicket, String> {
+    if inner
+        .view
+        .providers
+        .get(provider_index(provider))
+        .and_then(|state| state.reading_id.as_deref())
+        != Some(reading_id)
+    {
+        return Err("The usage reading changed. Review it before starting this watch.".into());
+    }
     let snapshot = availability_arm_snapshot(inner, provider)?;
     Watch::arm(
         snapshot,
@@ -617,6 +653,59 @@ fn arm_availability_watch(
     let id = inner.availability.arm(&snapshot, limit_id, now, max_age)?;
     inner.identity_demand[provider_index(provider)] = false;
     Ok(id)
+}
+
+fn availability_state(inner: &Inner, now: i64) -> AvailabilityState {
+    let watches = inner.availability.status(|provider| {
+        availability_arm_snapshot(inner, provider)
+            .ok()
+            .and_then(|snapshot| {
+                fresh_account_key(snapshot, now, notification_max_age(inner, provider))
+            })
+    });
+    let providers = PROVIDERS
+        .into_iter()
+        .map(|provider| {
+            let index = provider_index(provider);
+            let reading_id = inner
+                .view
+                .providers
+                .get(index)
+                .filter(|state| state.id == provider && state.snapshot.is_some())
+                .and_then(|state| state.reading_id.clone());
+            let quotas = availability_arm_snapshot(inner, provider)
+                .ok()
+                .filter(|_| reading_id.is_some())
+                .map(|snapshot| {
+                    let max_age = notification_max_age(inner, provider);
+                    snapshot
+                        .limits
+                        .iter()
+                        .filter_map(|limit| {
+                            Watch::readiness(snapshot, &limit.id, now, max_age)
+                                .ok()
+                                .map(|readiness| WatchQuotaStatus {
+                                    limit_id: limit.id.clone(),
+                                    window_seconds: limit.window_seconds,
+                                    readiness,
+                                })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            WatchProviderStatus {
+                provider,
+                reading_id,
+                preparing: inner.identity_demand[index],
+                quotas,
+            }
+        })
+        .collect();
+    AvailabilityState {
+        watches: watches.watches,
+        providers,
+        error: watches.error,
+    }
 }
 
 fn availability_ticket(
@@ -940,6 +1029,7 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
     }
     schedule.generation = schedule.generation.wrapping_add(1);
     state.snapshot = None;
+    state.reading_id = None;
     state.error = None;
     state.stale = true;
     state.next_retry_at = None;
@@ -1124,6 +1214,7 @@ fn begin_recovery(
     });
     // Sign-in can select another account, so the previous account's reading must disappear.
     state.snapshot = None;
+    state.reading_id = None;
     state.error = None;
     state.next_retry_at = None;
     state.stale = true;
@@ -1424,6 +1515,7 @@ fn complete_recovery(
         })
     });
     state.snapshot = None;
+    state.reading_id = None;
     state.stale = true;
     state.next_retry_at = Some(schedule.next_due);
     None
@@ -1800,6 +1892,7 @@ fn apply_result(
             schedule.service_wait = None;
             state.error = None;
             state.next_retry_at = None;
+            state.reading_id = Some(READING_SEQUENCE.fetch_add(1, Ordering::Relaxed).to_string());
             state.snapshot = Some(snapshot);
             state.stale = is_stale(state, now, cadence);
         }
@@ -1816,6 +1909,7 @@ fn apply_result(
             schedule.next_due = schedule.blocked_until;
             if schedule.waiting_for_sign_in {
                 state.snapshot = None;
+                state.reading_id = None;
             }
             state.error = Some(error.issue());
             if state.id == ProviderId::Claude {
@@ -2572,6 +2666,7 @@ mod tests {
                 settings: Settings::default(),
                 providers: vec![ProviderState {
                     id: ProviderId::Claude,
+                    reading_id: Some("initial".into()),
                     snapshot: Some(ProviderSnapshot {
                         provider: ProviderId::Claude,
                         history_account: None,

@@ -65,6 +65,7 @@ export function createPreview(search = ""): AppState {
   const stale = parameters.get("stale") ?? (resets === "mixed" ? "codex" : null);
   const theme = parameters.get("theme");
   const codexFiveHour = parameters.get("codex_5h") === "1";
+  const watchPreview = parameters.has("watches");
   const quota = (id: string, label: string, used: number, duration: number, reset: number): Limit => ({
     id, label, kind: "quota", used_fraction: used, window_seconds: duration,
     resets_at: now + reset, provenance: "official", enabled: true, amount: null, detail: null,
@@ -75,7 +76,11 @@ export function createPreview(search = ""): AppState {
     const error = enabled && (id === issueProvider || issueProvider === "both") && issue
       ? issue : cached ? previewIssues.find((candidate) => candidate.kind === "network") ?? null : null;
     return {
-      id, snapshot: !enabled || (error && !cached) ? null : { provider: id, limits: resetPreviewLimits(limits, resets, now), plan, fetched_at: now - (cached ? 480 : 24), warnings: [] },
+      id, reading_id: `${id}:preview:1`,
+      snapshot: !enabled || (error && !cached) ? null : { provider: id, limits: resetPreviewLimits(limits.map((limit, index) =>
+        watchPreview && index === 0 ? { ...limit, used_fraction: 1,
+          label: parameters.get("watches") === "long" ? `${limit.label} · Shared allowance for extended reasoning and large codebase reviews` : limit.label,
+        } : limit), resets, now), plan, fetched_at: now - (cached ? 480 : 24), warnings: [] },
       error, recovery: null, refreshing: error?.kind === "rate_limited" && parameters.get("retry") === "checking", stale: error !== null,
       next_retry_at: error?.kind === "rate_limited" ? now + (["ready", "checking"].includes(parameters.get("retry") ?? "") ? -1 : 3600) : null,
     };

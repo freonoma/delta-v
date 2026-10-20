@@ -7,6 +7,8 @@ import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
 import { HistoryView } from "./HistoryView";
 import { UpcomingResets } from "./UpcomingResets";
+import { QuotaWatchControl, WatchFeedback } from "./AvailabilityControls";
+import { useAvailabilityWatches } from "./useAvailabilityWatches";
 import { upcomingResets } from "./upcoming-resets";
 import "./UpcomingResets.css";
 import { openSettings } from "./settings-navigation";
@@ -45,7 +47,10 @@ function ResetTime({ timestamp, now }: { timestamp: number | null; now: number }
   );
 }
 
-function LimitRow({ limit, now, threshold, tracked, percentageMode }: { limit: Limit; now: number; threshold: number; tracked: boolean; percentageMode: PercentageMode }) {
+function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, watches, watchBlocked }: {
+  limit: Limit; now: number; threshold: number; tracked: boolean; percentageMode: PercentageMode;
+  provider: ProviderState; watches: ReturnType<typeof useAvailabilityWatches>; watchBlocked: boolean;
+}) {
   const used = usedPercent(limit);
   const remaining = remainingPercent(limit);
   const low = limit.enabled && remaining !== null && remaining < threshold;
@@ -57,7 +62,7 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode }: { limit: L
     : percentage > 99 && percentage < 100 ? ">99"
     : limit.kind === "quota" ? wholePercent(percentage, mode) : Math.round(percentage);
   return (
-    <li className={`limit-row${!limit.enabled ? " disabled-limit" : ""}`}>
+    <li className={`limit-row${!limit.enabled ? " disabled-limit" : ""}`} tabIndex={-1}>
       <div className="limit-heading">
         <span className="limit-label">{limit.label}{tracked && <span className="tracked-indicator" title="Tracked in the menu bar" aria-label="Tracked in the menu bar" />}</span>
         {hasBar && <span className={`used-value${low ? " low" : ""}`}>{percentageLabel}% <span>{mode}</span></span>}
@@ -74,6 +79,7 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode }: { limit: L
         <ResetTime timestamp={limit.resets_at} now={now} />
         <span className={`provenance ${limit.provenance}`}>{provenanceNames[limit.provenance]}</span>
       </div>
+      <QuotaWatchControl watches={watches} provider={provider} limit={limit} now={now} blocked={watchBlocked} />
     </li>
   );
 }
@@ -97,7 +103,7 @@ function ProviderDetails({ limits, warnings }: { limits: Limit[]; warnings: stri
   );
 }
 
-function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, connectionPending, onReconnect, onCancel, onConnect }: {
+function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, connectionPending, onReconnect, onCancel, onConnect, watches, paused }: {
   provider: ProviderState;
   settings: Settings;
   now: number;
@@ -107,6 +113,8 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
   onReconnect: (provider: ProviderId, action: ReconnectAction) => void;
   onCancel: (provider: ProviderId) => void;
   onConnect: (provider: ProviderId) => void;
+  watches: ReturnType<typeof useAvailabilityWatches>;
+  paused: boolean;
 }) {
   const enabled = providerEnabled(settings, provider.id);
   const snapshot = enabled ? provider.snapshot : null;
@@ -180,6 +188,7 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
               threshold={settings.threshold}
               percentageMode={settings.percentage_mode}
               tracked={settings.tracked_limit === `${provider.id}:${limit.id}`}
+              provider={provider} watches={watches} watchBlocked={!enabled || paused || recovery !== null || connectionPending}
             />
           ))}
         </ul>
@@ -207,6 +216,7 @@ export default function App() {
     selectProviders, changePanelPreferences,
     updateHistoryPreferences, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
   } = useAppController();
+  const watches = useAvailabilityWatches(state);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [resetsOpen, setResetsOpen] = useState(false);
@@ -238,12 +248,13 @@ export default function App() {
         setHistoryOpen(false);
         setShowDragHint(false);
         setKeyboardNavigation(false);
+        watches.abandonPreparation();
         window.cancelAnimationFrame(focusFrame.current);
         focusFrame.current = window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
       }
     }).then((stop) => { if (disposed) stop(); else unlistenOpen = stop; }).catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
     return () => { disposed = true; unlistenOpen?.(); unlistenMove?.(); window.cancelAnimationFrame(focusFrame.current); };
-  }, [setError]);
+  }, [setError, watches.abandonPreparation]);
 
   useEffect(() => {
     const element = shell.current;
@@ -310,6 +321,19 @@ export default function App() {
         return;
       }
       if (event.key !== "Escape" || saving || panelCommandPending.current) return;
+      const preparing = watches.state.providers.find((provider) => provider.preparing);
+      if (!historyOpen && preparing && !watches.pending) {
+        event.preventDefault();
+        const focused = document.activeElement;
+        void watches.clearPreparation(preparing.provider).then((cleared) => {
+          if (cleared) window.requestAnimationFrame(() => {
+            if (document.activeElement !== focused && document.activeElement !== document.body) return;
+            (shell.current?.querySelector<HTMLButtonElement>(`[data-watch-provider="${preparing.provider}"] button`)
+              ?? shell.current)?.focus({ preventScroll: true });
+          });
+        });
+        return;
+      }
       if (historyOpen) { setHistoryOpen(false); return; }
       if (miniActive && miniExpanded) { void changePanelPreferences({ expanded: false }); return; }
       if (!miniActive && resetsOpen) {
@@ -318,6 +342,7 @@ export default function App() {
         return;
       }
       if (!miniActive && expanded) { setExpanded(false); return; }
+      watches.abandonPreparation();
       if (native) void invoke("hide_popover").catch((caught: unknown) => setError(errorMessage(caught)));
       else {
         setExpanded(false);
@@ -325,7 +350,13 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [historyOpen, expanded, resetsOpen, miniActive, miniExpanded, saving, changePanelPreferences, panelCommandPending, setError]);
+  }, [historyOpen, expanded, resetsOpen, miniActive, miniExpanded, saving, changePanelPreferences, panelCommandPending, setError,
+    watches.state.providers, watches.pending, watches.clearPreparation, watches.abandonPreparation]);
+
+  useEffect(() => {
+    // Leaving the full usage view must not leave an abandoned verification request polling.
+    watches.abandonPreparation();
+  }, [selection, historyOpen, miniActive, watches.abandonPreparation]);
 
   async function togglePin() {
     if (panelBusy) return;
@@ -461,6 +492,7 @@ export default function App() {
                     connectionPending={pendingConnection[provider.id] ?? false}
                     onReconnect={(id, action) => void reconnect(id, action)} onCancel={(id) => void cancelReconnect(id)}
                     onConnect={(id) => void setProviderEnabled(id, true)}
+                    watches={watches} paused={state.paused}
                   />
                 ))}
               </div>
@@ -468,6 +500,8 @@ export default function App() {
                 {expanded ? "Show less" : "Show more"}<Icon name="chevron" />
               </button>
               <UpcomingResets rows={resetRows} now={now} open={resetsOpen} onToggle={() => setResetsOpen(!resetsOpen)} buttonRef={resetsButton} />
+              <WatchFeedback watches={watches} onManage={() => void openSettings("notifications")
+                .catch((caught: unknown) => setError(errorMessage(caught)))} />
             </>
           ) : (
             <div className="app-loading">

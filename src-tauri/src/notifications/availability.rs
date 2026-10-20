@@ -5,7 +5,14 @@
 use serde::{Deserialize, Serialize};
 
 use super::{ambiguous_ids, eligible_reading, stable_limit_id, valid_account_key, valid_text};
-use crate::model::{ProviderId, ProviderSnapshot};
+use crate::model::{Limit, ProviderId, ProviderSnapshot};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmReadiness {
+    Ready,
+    NeedsIdentity,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WatchState {
@@ -73,6 +80,22 @@ pub struct RecoveredAllowance {
 }
 
 impl Watch {
+    pub fn readiness(
+        snapshot: &ProviderSnapshot,
+        limit_id: &str,
+        now: i64,
+        max_age_seconds: u64,
+    ) -> Result<ArmReadiness, ArmError> {
+        arm_limit(snapshot, limit_id, now, max_age_seconds)?;
+        Ok(
+            if fresh_account_key(snapshot, now, max_age_seconds).is_some() {
+                ArmReadiness::Ready
+            } else {
+                ArmReadiness::NeedsIdentity
+            },
+        )
+    }
+
     pub fn arm(
         snapshot: &ProviderSnapshot,
         account_key: Option<&str>,
@@ -80,28 +103,10 @@ impl Watch {
         now: i64,
         max_age_seconds: u64,
     ) -> Result<Self, ArmError> {
-        if !valid_timestamp(now) {
-            return Err(ArmError::InvalidClock);
-        }
-        if !fresh(snapshot, now, max_age_seconds) {
-            return Err(ArmError::StaleReading);
-        }
+        let limit = arm_limit(snapshot, limit_id, now, max_age_seconds)?;
         let account_key = account_key
             .filter(|key| valid_account_key(key))
             .ok_or(ArmError::UnverifiedAccount)?;
-        if ambiguous_ids(&snapshot.limits).contains(limit_id) {
-            return Err(ArmError::UnavailableQuota);
-        }
-        let limit = snapshot
-            .limits
-            .iter()
-            .find(|limit| limit.id == limit_id)
-            .filter(|limit| eligible_reading(limit, now).is_some())
-            .ok_or(ArmError::UnavailableQuota)?;
-        // A rounded display percentage does not establish exhaustion.
-        if limit.used_fraction != Some(1.0) {
-            return Err(ArmError::NotExhausted);
-        }
         Ok(Self {
             provider: snapshot.provider,
             account_key: account_key.to_owned(),
@@ -220,6 +225,46 @@ impl Watch {
             other_exhausted,
         })
     }
+}
+
+fn arm_limit<'a>(
+    snapshot: &'a ProviderSnapshot,
+    limit_id: &str,
+    now: i64,
+    max_age_seconds: u64,
+) -> Result<&'a Limit, ArmError> {
+    if !valid_timestamp(now) {
+        return Err(ArmError::InvalidClock);
+    }
+    if !fresh(snapshot, now, max_age_seconds) {
+        return Err(ArmError::StaleReading);
+    }
+    if ambiguous_ids(&snapshot.limits).contains(limit_id) {
+        return Err(ArmError::UnavailableQuota);
+    }
+    let limit = snapshot
+        .limits
+        .iter()
+        .find(|limit| limit.id == limit_id)
+        .filter(|limit| eligible_reading(limit, now).is_some())
+        .ok_or(ArmError::UnavailableQuota)?;
+    // A rounded display percentage does not establish exhaustion.
+    if limit.used_fraction != Some(1.0) {
+        return Err(ArmError::NotExhausted);
+    }
+    Ok(limit)
+}
+
+/// The provider pipeline supplies the identity; stale or malformed keys cannot describe it now.
+pub(crate) fn fresh_account_key(
+    snapshot: &ProviderSnapshot,
+    now: i64,
+    max_age_seconds: u64,
+) -> Option<&str> {
+    fresh(snapshot, now, max_age_seconds)
+        .then_some(snapshot.history_account.as_deref())
+        .flatten()
+        .filter(|key| valid_account_key(key))
 }
 
 fn valid_timestamp(timestamp: i64) -> bool {

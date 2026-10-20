@@ -38,6 +38,7 @@ impl Fixture {
                     .into_iter()
                     .map(|provider| ProviderState {
                         id: provider,
+                        reading_id: Some("initial".into()),
                         snapshot: Some(reading(provider, 100, 1.0)),
                         error: None,
                         recovery: None,
@@ -401,7 +402,9 @@ fn arm_preflight_rejects_nonexhausted_readings_without_saving() {
     let fixture = Fixture::new();
     let mut state = fixture.state();
     state.view.providers[0].snapshot = Some(reading(ProviderId::Claude, 100, 0.999));
-    assert!(availability_arm_ticket(&state, ProviderId::Claude, "session", 100).is_err());
+    assert!(
+        availability_arm_ticket(&state, ProviderId::Claude, "session", "initial", 100).is_err()
+    );
     assert!(!fixture.registry().has_provider(ProviderId::Claude));
 }
 
@@ -410,7 +413,8 @@ fn permission_wait_cannot_move_an_arm_to_another_account_quota_or_connection() {
     for reason in 0..4 {
         let fixture = Fixture::new();
         let mut state = fixture.state();
-        let ticket = availability_arm_ticket(&state, ProviderId::Claude, "session", 100).unwrap();
+        let ticket =
+            availability_arm_ticket(&state, ProviderId::Claude, "session", "initial", 100).unwrap();
         let mut snapshot = reading(ProviderId::Claude, 101, 1.0);
         match reason {
             0 => snapshot.history_account = Some("b".repeat(64)),
@@ -433,7 +437,8 @@ fn permission_wait_accepts_a_newer_exhausted_reading_but_rejects_recovery() {
     for recovered in [false, true] {
         let fixture = Fixture::new();
         let mut state = fixture.state();
-        let ticket = availability_arm_ticket(&state, ProviderId::Claude, "session", 100).unwrap();
+        let ticket =
+            availability_arm_ticket(&state, ProviderId::Claude, "session", "initial", 100).unwrap();
         state.view.providers[0].snapshot = Some(reading(
             ProviderId::Claude,
             101,
@@ -446,4 +451,183 @@ fn permission_wait_accepts_a_newer_exhausted_reading_but_rejects_recovery() {
             !recovered
         );
     }
+}
+
+#[test]
+fn displayed_reading_token_changes_before_publication_even_with_the_same_timestamp() {
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    let displayed = state.snapshot();
+    let original_id = displayed.providers[0].reading_id.as_deref().unwrap();
+    let mut changed = reading(ProviderId::Claude, 100, 1.0);
+    changed.history_account = Some("b".repeat(64));
+    apply_result(&mut state, 0, 300, 100, Ok(changed));
+    assert_eq!(state.view.revision, displayed.revision);
+    assert_ne!(
+        state.view.providers[0].reading_id.as_deref(),
+        Some(original_id)
+    );
+    assert!(
+        availability_arm_ticket(&state, ProviderId::Claude, "session", original_id, 100).is_err()
+    );
+    let current_id = state.view.providers[0].reading_id.as_deref().unwrap();
+    assert!(
+        availability_arm_ticket(&state, ProviderId::Claude, "session", current_id, 100).is_ok()
+    );
+    assert!(!fixture.registry().has_provider(ProviderId::Claude));
+}
+
+#[test]
+fn clearing_a_connection_or_recovery_reading_also_clears_its_token() {
+    for recovery in [false, true] {
+        let fixture = Fixture::new();
+        let mut state = fixture.state();
+        if recovery {
+            complete_recovery(&mut state, 0, true, None, None, 101);
+        } else {
+            change_connection(&mut state, 0, false, 101);
+        }
+        assert!(state.view.providers[0].snapshot.is_none());
+        assert!(state.view.providers[0].reading_id.is_none());
+        let status = availability_state(&state, 101);
+        assert!(status.providers[0].reading_id.is_none());
+        assert!(status.providers[0].quotas.is_empty());
+    }
+}
+
+#[test]
+fn status_keeps_all_saved_accounts_and_hidden_providers_without_exposing_keys() {
+    use crate::availability_watches::AccountMatch;
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    arm(&mut state);
+    state.view.providers[0]
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .history_account = Some("b".repeat(64));
+    arm(&mut state);
+    arm_availability_watch(&mut state, ProviderId::Codex, "session", 100).unwrap();
+    let status = availability_state(&state, 100);
+    assert_eq!(status.watches.len(), 3);
+    assert_eq!(status.watches[0].account_match, AccountMatch::Different);
+    assert_eq!(status.watches[1].account_match, AccountMatch::Current);
+    assert_eq!(status.watches[2].account_match, AccountMatch::Current);
+    assert_eq!(status.providers.len(), 2);
+    assert_eq!(status.providers[0].quotas[0].readiness, ArmReadiness::Ready);
+    let json = serde_json::to_string(&status.watches).unwrap();
+    assert!(json.contains("\"account_match\":\"different\""));
+    assert!(!json.contains(&"a".repeat(64)));
+    assert!(!json.contains(&"b".repeat(64)));
+    assert!(!json.contains("account_key"));
+}
+
+#[test]
+fn readiness_checks_exhaustion_and_reset_eligibility_before_requesting_identity() {
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    prepare_availability_watch(&mut state, ProviderId::Claude).unwrap();
+    let snapshot = state.view.providers[0].snapshot.as_mut().unwrap();
+    snapshot.history_account = None;
+    for (id, used, reset) in [
+        ("rounded", Some(0.999), Some(2000)),
+        ("missing-usage", None, Some(2000)),
+        ("missing-reset", Some(1.0), None),
+        ("elapsed", Some(1.0), Some(100)),
+        ("invalid", Some(1.0), Some(i64::MAX)),
+    ] {
+        let mut limit = snapshot.limits[0].clone();
+        limit.id = id.into();
+        limit.used_fraction = used;
+        limit.resets_at = reset;
+        snapshot.limits.push(limit);
+    }
+    let original = snapshot.clone();
+    state.view.providers[0].stale = true;
+    let status = availability_state(&state, 100);
+    let provider = &status.providers[0];
+    assert!(provider.preparing);
+    assert_eq!(provider.reading_id.as_deref(), Some("initial"));
+    assert_eq!(provider.quotas.len(), 1);
+    assert_eq!(provider.quotas[0].limit_id, "session");
+    assert_eq!(provider.quotas[0].readiness, ArmReadiness::NeedsIdentity);
+    assert_eq!(state.view.providers[0].snapshot.as_ref(), Some(&original));
+    assert!(!fixture.registry().has_provider(ProviderId::Claude));
+}
+
+#[test]
+fn status_excludes_ambiguous_unofficial_disabled_and_positional_targets() {
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    let snapshot = state.view.providers[0].snapshot.as_mut().unwrap();
+    for reason in 0..5 {
+        let mut limit = snapshot.limits[0].clone();
+        limit.id = format!("quota-{reason}");
+        match reason {
+            0 => limit.enabled = false,
+            1 => limit.provenance = Provenance::LocalEstimate,
+            2 => limit.id = "additional:0:session".into(),
+            3 => limit.kind = LimitKind::Credits,
+            _ => snapshot.limits.push(limit.clone()),
+        }
+        snapshot.limits.push(limit);
+    }
+    let status = availability_state(&state, 100);
+    assert_eq!(status.providers[0].quotas.len(), 1);
+    assert_eq!(status.providers[0].quotas[0].limit_id, "session");
+}
+
+#[test]
+fn current_account_status_and_readiness_use_runtime_freshness_and_connection_guards() {
+    use crate::availability_watches::AccountMatch;
+    for reason in 0..7 {
+        let fixture = Fixture::new();
+        let mut state = fixture.state();
+        arm(&mut state);
+        let mut now = 100;
+        match reason {
+            0 => state.view.settings.claude_enabled = false,
+            1 => state.view.paused = true,
+            2 => state.view.providers[0].error = Some(ProviderError::Network.issue()),
+            3 => state.view.providers[0].recovery = Some(RecoveryStage::Checking),
+            4 => now = 431,
+            5 => now = 99,
+            _ => {
+                state.view.providers[0]
+                    .snapshot
+                    .as_mut()
+                    .unwrap()
+                    .history_account = None;
+            }
+        }
+        let status = availability_state(&state, now);
+        assert_eq!(status.watches.len(), 1);
+        assert_eq!(status.watches[0].account_match, AccountMatch::Unverified);
+        if reason == 6 {
+            assert_eq!(
+                status.providers[0].quotas[0].readiness,
+                ArmReadiness::NeedsIdentity
+            );
+        } else {
+            assert!(status.providers[0].quotas.is_empty(), "reason {reason}");
+        }
+    }
+}
+
+#[test]
+fn expired_sibling_does_not_hide_a_fresh_current_account_or_armable_quota() {
+    use crate::availability_watches::AccountMatch;
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    arm(&mut state);
+    let snapshot = state.view.providers[0].snapshot.as_mut().unwrap();
+    let mut sibling = snapshot.limits[0].clone();
+    sibling.id = "weekly".into();
+    sibling.resets_at = Some(100);
+    snapshot.limits.push(sibling);
+    state.view.providers[0].stale = true;
+    let status = availability_state(&state, 430);
+    assert_eq!(status.watches[0].account_match, AccountMatch::Current);
+    assert_eq!(status.providers[0].quotas.len(), 1);
+    assert_eq!(status.providers[0].quotas[0].readiness, ArmReadiness::Ready);
 }

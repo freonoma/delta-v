@@ -1,0 +1,21 @@
+.quota-watch-control { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; margin-top: 7px; font-size: 10px; line-height: 1.5; }
+.quota-watch-control .text-button { padding: 2px 0; text-align: left; font-size: 10px; }
+.quota-watch-status { color: var(--secondary); }
+.watch-feedback { margin: 0 12px 12px; font-size: 10px; line-height: 1.5; color: var(--secondary); }
+.watch-feedback p { margin-bottom: 6px; }
+.watch-feedback .text-button { padding: 2px 0; text-align: left; }
+.watch-feedback .watch-status-check { margin-left: 12px; }
+.watch-error { color: var(--warning); overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; }
+.availability-settings { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+.availability-settings h3 { margin-bottom: 8px; }
+.watch-caption, .watch-empty { color: var(--secondary); font-size: 11px; line-height: 1.6; margin: 0 0 10px; }
+.saved-watch-list { list-style: none; padding: 0; margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; }
+.saved-watch { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-bottom: 1px solid var(--line); }
+.saved-watch:last-child { border-bottom: 0; }
+.saved-watch > div { flex: 1; min-width: 0; }
+.saved-watch p { color: var(--secondary); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.saved-watch .saved-watch-label { color: var(--text); font-size: 11px; margin-bottom: 3px; }
+.saved-watch .text-button { flex-shrink: 0; padding: 2px 0; }
+.watch-actions { margin-bottom: 10px; }
+.watch-preparation { margin-bottom: 10px; color: var(--secondary); font-size: 11px; line-height: 1.5; }
+.watch-preparation .text-button { padding: 3px 0; }

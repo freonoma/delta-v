@@ -32,6 +32,15 @@ pub struct WatchSummary {
     pub label: String,
     pub window_seconds: Option<u64>,
     pub armed_at: i64,
+    pub account_match: AccountMatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountMatch {
+    Current,
+    Different,
+    Unverified,
 }
 
 impl Registry {
@@ -50,7 +59,7 @@ impl Registry {
         }
     }
 
-    pub fn status(&self) -> WatchStatus {
+    pub fn status<'a>(&self, account: impl Fn(ProviderId) -> Option<&'a str>) -> WatchStatus {
         WatchStatus {
             watches: self
                 .saved
@@ -63,6 +72,11 @@ impl Registry {
                     label: entry.label.clone(),
                     window_seconds: entry.watch.window_seconds,
                     armed_at: entry.watch.armed_at,
+                    account_match: match account(entry.watch.provider) {
+                        Some(key) if key == entry.watch.account_key => AccountMatch::Current,
+                        Some(_) => AccountMatch::Different,
+                        None => AccountMatch::Unverified,
+                    },
                 })
                 .collect(),
             error: self.error.clone(),
