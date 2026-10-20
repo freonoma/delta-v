@@ -11,11 +11,16 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::{
+    availability_store::Store as AvailabilityStore,
+    availability_watches::{Registry as AvailabilityWatches, WatchStatus},
     cooldown::{self, Store as CooldownStore},
     credentials,
     history::Retention,
     model::{LimitKind, Provenance, ProviderId, ProviderSnapshot},
-    notifications::{Evaluator, LowAllowance},
+    notifications::{
+        Evaluator, LowAllowance,
+        availability::{RecoveredAllowance, Watch},
+    },
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
     recording::{HistoryState, Recorder},
@@ -104,6 +109,8 @@ struct Inner {
     notifications: Evaluator,
     notification_generation: u64,
     notification_permission: Option<bool>,
+    availability: AvailabilityWatches,
+    identity_demand: [bool; 2],
 }
 
 /// An accepted reading, kept in Rust while notification permission is checked.
@@ -112,6 +119,22 @@ pub struct NotificationTicket {
     pub snapshot: ProviderSnapshot,
     connection_generation: u64,
     policy_generation: u64,
+}
+
+/// A watch response remains independent of the low-allowance notification preference.
+pub struct AvailabilityTicket {
+    pub snapshot: ProviderSnapshot,
+    connection_generation: u64,
+    watch_generation: u64,
+}
+
+/// Binds an explicit arm action while macOS permission may await user input.
+pub struct AvailabilityArmTicket {
+    provider: ProviderId,
+    account_key: String,
+    limit_id: String,
+    window_seconds: Option<u64>,
+    connection_generation: u64,
 }
 
 impl Inner {
@@ -170,6 +193,12 @@ impl Runtime {
             notifications: Evaluator::default(),
             notification_generation: 0,
             notification_permission: None,
+            availability: AvailabilityWatches::load(AvailabilityStore::new(
+                std::env::var_os("HOME").map(|home| {
+                    std::path::PathBuf::from(home).join(".config/delta-v/availability-watches.json")
+                }),
+            )),
+            identity_demand: [false; 2],
         };
         restore_claude_wait(&mut inner, &cooldown, providers::now());
         Ok(Self {
@@ -247,6 +276,106 @@ impl Runtime {
         })
     }
 
+    pub fn availability_state(&self) -> Result<WatchStatus, String> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not read availability watches.")?;
+        self.require_running()?;
+        Ok(inner.availability.status())
+    }
+
+    pub fn prepare_availability_watch(&self, provider: ProviderId) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not prepare an availability watch.")?;
+        self.require_running()?;
+        prepare_availability_watch(&mut inner, provider)?;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    pub fn clear_availability_preparation(&self, provider: ProviderId) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not cancel availability watch preparation.")?;
+        self.require_running()?;
+        inner.identity_demand[provider_index(provider)] = false;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    pub fn availability_arm_ticket(
+        &self,
+        provider: ProviderId,
+        limit_id: &str,
+    ) -> Result<AvailabilityArmTicket, String> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not prepare an availability watch.")?;
+        self.require_running()?;
+        availability_arm_ticket(&inner, provider, limit_id, providers::now())
+    }
+
+    pub fn arm_availability_watch(&self, ticket: &AvailabilityArmTicket) -> Result<String, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not start an availability watch.")?;
+        self.require_running()?;
+        let id = arm_availability_from_ticket(&mut inner, ticket, providers::now())?;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(id)
+    }
+
+    pub fn cancel_availability_watch(&self, id: &str) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not cancel an availability watch.")?;
+        self.require_running()?;
+        inner.availability.cancel(id)?;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    pub fn availability_ticket_current(&self, ticket: &AvailabilityTicket) -> bool {
+        self.inner.lock().is_ok_and(|inner| {
+            !self.quitting.load(Ordering::Relaxed)
+                && availability_ticket_current(&inner, ticket, providers::now())
+        })
+    }
+
+    pub fn availability_candidates(
+        &self,
+        ticket: &AvailabilityTicket,
+        can_deliver: bool,
+    ) -> Result<Vec<RecoveredAllowance>, String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Could not evaluate availability watches.")?;
+        if self.quitting.load(Ordering::Relaxed) {
+            return Ok(Vec::new());
+        }
+        availability_candidates(&mut inner, ticket, can_deliver, providers::now())
+    }
+
+    fn require_running(&self) -> Result<(), String> {
+        if self.quitting.load(Ordering::Relaxed) {
+            Err("Delta-V is quitting.".into())
+        } else {
+            Ok(())
+        }
+    }
+
     fn save_change(
         &self,
         change: impl FnOnce(&Settings) -> Result<Settings, SettingsError>,
@@ -274,7 +403,8 @@ fn save_settings_change(
     }
     for (index, provider) in PROVIDERS.into_iter().enumerate() {
         if inner.view.settings.providers.includes(provider) != settings.providers.includes(provider)
-            || (!should_poll(&inner.view.settings, provider) && should_poll(&settings, provider))
+            || (!should_poll_for(inner, &inner.view.settings, provider)
+                && should_poll_for(inner, &settings, provider))
         {
             inner.schedules[index].next_due = 0;
         } else if settings.refresh_seconds != inner.view.settings.refresh_seconds {
@@ -359,21 +489,170 @@ fn notification_max_age(inner: &Inner, provider: ProviderId) -> u64 {
 }
 
 fn notification_ticket_current(inner: &Inner, ticket: &NotificationTicket, now: i64) -> bool {
-    let provider = ticket.snapshot.provider;
-    let index = provider_index(provider);
     inner.view.settings.notifications_enabled
-        && inner.view.settings.is_enabled(provider)
-        && !inner.view.paused
         && inner.notification_generation == ticket.policy_generation
-        && inner.schedules[index].generation == ticket.connection_generation
-        && ticket.snapshot.fetched_at <= now
-        && now.abs_diff(ticket.snapshot.fetched_at) <= notification_max_age(inner, provider)
+        && accepted_snapshot_current(inner, &ticket.snapshot, ticket.connection_generation, now)
+}
+
+fn accepted_snapshot_current(
+    inner: &Inner,
+    snapshot: &ProviderSnapshot,
+    connection_generation: u64,
+    now: i64,
+) -> bool {
+    let provider = snapshot.provider;
+    let index = provider_index(provider);
+    inner.view.settings.is_enabled(provider)
+        && !inner.view.paused
+        && inner.schedules[index].generation == connection_generation
+        && snapshot.fetched_at <= now
+        && now.abs_diff(snapshot.fetched_at) <= notification_max_age(inner, provider)
         && inner.view.providers.get(index).is_some_and(|state| {
             state.id == provider
                 && state.error.is_none()
                 && state.recovery.is_none()
-                && state.snapshot.as_ref() == Some(&ticket.snapshot)
+                && state.snapshot.as_ref() == Some(snapshot)
         })
+}
+
+fn prepare_availability_watch(inner: &mut Inner, provider: ProviderId) -> Result<(), String> {
+    let index = provider_index(provider);
+    if !inner.view.settings.is_enabled(provider) {
+        return Err("Connect this provider before preparing an availability watch.".into());
+    }
+    if inner
+        .view
+        .providers
+        .get(index)
+        .is_none_or(|state| state.id != provider || state.recovery.is_some())
+    {
+        return Err("Wait for the current sign-in action to finish.".into());
+    }
+    // Identity preparation joins ordinary monitoring without advancing its next check.
+    inner.identity_demand[index] = true;
+    Ok(())
+}
+
+fn availability_arm_snapshot(
+    inner: &Inner,
+    provider: ProviderId,
+) -> Result<&ProviderSnapshot, String> {
+    let index = provider_index(provider);
+    if !inner.view.settings.is_enabled(provider) {
+        return Err("Connect this provider before starting an availability watch.".into());
+    }
+    if inner.view.paused {
+        return Err("Unlock your Mac before starting an availability watch.".into());
+    }
+    inner
+        .view
+        .providers
+        .get(index)
+        .filter(|state| state.id == provider && state.error.is_none() && state.recovery.is_none())
+        .and_then(|state| state.snapshot.as_ref())
+        .filter(|snapshot| snapshot.provider == provider)
+        .ok_or_else(|| "A fresh usage reading is needed to start this watch.".into())
+}
+
+fn availability_arm_ticket(
+    inner: &Inner,
+    provider: ProviderId,
+    limit_id: &str,
+    now: i64,
+) -> Result<AvailabilityArmTicket, String> {
+    let snapshot = availability_arm_snapshot(inner, provider)?;
+    Watch::arm(
+        snapshot,
+        snapshot.history_account.as_deref(),
+        limit_id,
+        now,
+        notification_max_age(inner, provider),
+    )
+    .map_err(|error| error.to_string())?;
+    let account_key = snapshot
+        .history_account
+        .clone()
+        .ok_or("A verified account is needed to start this watch.")?;
+    let limit = snapshot
+        .limits
+        .iter()
+        .find(|limit| limit.id == limit_id)
+        .ok_or("This quota does not have a usable reading.")?;
+    Ok(AvailabilityArmTicket {
+        provider,
+        account_key,
+        limit_id: limit.id.clone(),
+        window_seconds: limit.window_seconds,
+        connection_generation: inner.schedules[provider_index(provider)].generation,
+    })
+}
+
+fn arm_availability_from_ticket(
+    inner: &mut Inner,
+    ticket: &AvailabilityArmTicket,
+    now: i64,
+) -> Result<String, String> {
+    if inner.schedules[provider_index(ticket.provider)].generation != ticket.connection_generation {
+        return Err("The connection changed. Start this availability watch again.".into());
+    }
+    let snapshot = availability_arm_snapshot(inner, ticket.provider)?;
+    if snapshot.history_account.as_deref() != Some(ticket.account_key.as_str())
+        || !snapshot.limits.iter().any(|limit| {
+            limit.id == ticket.limit_id && limit.window_seconds == ticket.window_seconds
+        })
+    {
+        return Err("The account or quota changed. Start this availability watch again.".into());
+    }
+    arm_availability_watch(inner, ticket.provider, &ticket.limit_id, now)
+}
+
+fn arm_availability_watch(
+    inner: &mut Inner,
+    provider: ProviderId,
+    limit_id: &str,
+    now: i64,
+) -> Result<String, String> {
+    let snapshot = availability_arm_snapshot(inner, provider)?.clone();
+    let max_age = notification_max_age(inner, provider);
+    let id = inner.availability.arm(&snapshot, limit_id, now, max_age)?;
+    inner.identity_demand[provider_index(provider)] = false;
+    Ok(id)
+}
+
+fn availability_ticket(
+    inner: &Inner,
+    accepted: Option<&ProviderSnapshot>,
+) -> Option<AvailabilityTicket> {
+    let snapshot = accepted?;
+    if !inner.availability.has_provider(snapshot.provider) {
+        return None;
+    }
+    Some(AvailabilityTicket {
+        snapshot: snapshot.clone(),
+        connection_generation: inner.schedules[provider_index(snapshot.provider)].generation,
+        watch_generation: inner.availability.generation(),
+    })
+}
+
+fn availability_ticket_current(inner: &Inner, ticket: &AvailabilityTicket, now: i64) -> bool {
+    // The final watch may already be consumed durably before its candidate is submitted.
+    inner.availability.generation() == ticket.watch_generation
+        && accepted_snapshot_current(inner, &ticket.snapshot, ticket.connection_generation, now)
+}
+
+fn availability_candidates(
+    inner: &mut Inner,
+    ticket: &AvailabilityTicket,
+    can_deliver: bool,
+    now: i64,
+) -> Result<Vec<RecoveredAllowance>, String> {
+    if !availability_ticket_current(inner, ticket, now) {
+        return Ok(Vec::new());
+    }
+    let max_age = notification_max_age(inner, ticket.snapshot.provider);
+    inner
+        .availability
+        .observe(&ticket.snapshot, can_deliver, now, max_age)
 }
 
 fn notification_candidates(
@@ -656,6 +935,9 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
     let schedule = &mut inner.schedules[index];
     inner.notifications.reset_baseline(state.id);
     inner.view.settings.set_enabled(state.id, enabled);
+    if !enabled {
+        inner.identity_demand[index] = false;
+    }
     schedule.generation = schedule.generation.wrapping_add(1);
     state.snapshot = None;
     state.error = None;
@@ -1059,7 +1341,7 @@ fn finish_recovery(
     issue: Option<Issue>,
 ) {
     let runtime = app.state::<Runtime>();
-    let (accepted, ticket) = {
+    let (accepted, ticket, watch_ticket) = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
@@ -1076,12 +1358,16 @@ fn finish_recovery(
             persist_claude_wait(&mut inner, &runtime.cooldown, now);
         }
         let ticket = notification_ticket(&inner, accepted.as_ref());
-        (accepted, ticket)
+        let watch_ticket = availability_ticket(&inner, accepted.as_ref());
+        (accepted, ticket, watch_ticket)
     };
     publish(app);
     record_history(app, accepted);
     if let Some(ticket) = ticket {
         crate::notification_delivery::observe(app, ticket);
+    }
+    if let Some(ticket) = watch_ticket {
+        crate::notification_delivery::observe_availability(app, ticket);
     }
     runtime.wake.notify_one();
 }
@@ -1233,6 +1519,19 @@ fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
             || settings.notifications_enabled)
 }
 
+fn should_poll_for(inner: &Inner, settings: &Settings, provider: ProviderId) -> bool {
+    should_poll(settings, provider)
+        || (settings.is_enabled(provider)
+            && (inner.availability.has_provider(provider)
+                || inner.identity_demand[provider_index(provider)]))
+}
+
+fn needs_notification_identity(inner: &Inner, provider: ProviderId) -> bool {
+    inner.view.settings.notifications_enabled
+        || inner.availability.has_provider(provider)
+        || inner.identity_demand[provider_index(provider)]
+}
+
 fn queue_polls(inner: &mut Inner, activity: Activity, now: i64) -> Vec<(usize, ProviderId, u64)> {
     let mut pending = Vec::new();
     let was_paused = inner.view.paused;
@@ -1245,7 +1544,7 @@ fn queue_polls(inner: &mut Inner, activity: Activity, now: i64) -> Vec<(usize, P
             cancel.store(true, Ordering::Relaxed);
             inner.view.providers[index].recovery = Some(RecoveryStage::Cancelling);
         }
-        if !should_poll(&inner.view.settings, provider) {
+        if !should_poll_for(inner, &inner.view.settings, provider) {
             continue;
         }
         if was_paused && !inner.view.paused {
@@ -1334,12 +1633,12 @@ async fn fetch_provider(
     runtime: &Runtime,
 ) -> Result<ProviderSnapshot, ProviderError> {
     let generation = runtime.history.ticket();
-    // Account identity also supports in-memory notification deduplication when history is off.
+    // Watch preparation obtains identity with a new usage response, never an older snapshot.
     let needs_identity = generation.is_some()
         || runtime
             .inner
             .lock()
-            .is_ok_and(|inner| inner.view.settings.notifications_enabled);
+            .is_ok_and(|inner| needs_notification_identity(&inner, provider));
     let client = &runtime.client;
     let mut snapshot = match provider {
         ProviderId::Claude => {
@@ -1392,7 +1691,7 @@ fn finish(
     result: Result<ProviderSnapshot, ProviderError>,
 ) {
     let runtime = app.state::<Runtime>();
-    let (accepted, ticket) = {
+    let (accepted, ticket, watch_ticket) = {
         let Ok(mut inner) = runtime.inner.lock() else {
             return;
         };
@@ -1402,12 +1701,16 @@ fn finish(
             persist_claude_wait(&mut inner, &runtime.cooldown, now);
         }
         let ticket = notification_ticket(&inner, accepted.as_ref());
-        (accepted, ticket)
+        let watch_ticket = availability_ticket(&inner, accepted.as_ref());
+        (accepted, ticket, watch_ticket)
     };
     publish(app);
     record_history(app, accepted);
     if let Some(ticket) = ticket {
         crate::notification_delivery::observe(app, ticket);
+    }
+    if let Some(ticket) = watch_ticket {
+        crate::notification_delivery::observe_availability(app, ticket);
     }
 }
 
@@ -1659,6 +1962,9 @@ fn publish_view(app: &AppHandle, view: &AppState) {
         eprintln!("Could not update the usage panel: {error}");
     }
 }
+
+#[cfg(test)]
+mod availability_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2300,6 +2606,8 @@ mod tests {
             notifications: Evaluator::default(),
             notification_generation: 0,
             notification_permission: None,
+            availability: AvailabilityWatches::load(AvailabilityStore::new(None)),
+            identity_demand: [false; 2],
         }
     }
 

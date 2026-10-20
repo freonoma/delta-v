@@ -2,7 +2,9 @@
 //! Supply only accepted successful responses with separately verified account identity.
 //! Runtime connection/recovery generation checks must reject obsolete responses first.
 
-use super::{ambiguous_ids, eligible_reading, valid_account_key};
+use serde::{Deserialize, Serialize};
+
+use super::{ambiguous_ids, eligible_reading, stable_limit_id, valid_account_key, valid_text};
 use crate::model::{ProviderId, ProviderSnapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +37,18 @@ pub struct Watch {
     armed_at: i64,
     last_observed_at: i64,
     state: WatchState,
+}
+
+/// Only pending state is persisted. A saved reset time cannot establish recovery.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingWatch {
+    pub provider: ProviderId,
+    pub account_key: String,
+    pub limit_id: String,
+    pub window_seconds: Option<u64>,
+    pub armed_at: i64,
+    pub last_observed_at: i64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,6 +115,38 @@ impl Watch {
 
     pub fn state(&self) -> WatchState {
         self.state
+    }
+
+    pub fn pending(&self) -> Option<PendingWatch> {
+        (self.state() == WatchState::Waiting).then(|| PendingWatch {
+            provider: self.provider,
+            account_key: self.account_key.clone(),
+            limit_id: self.limit_id.clone(),
+            window_seconds: self.window_seconds,
+            armed_at: self.armed_at,
+            last_observed_at: self.last_observed_at,
+        })
+    }
+
+    pub fn restore(saved: &PendingWatch) -> Option<Self> {
+        if !valid_account_key(&saved.account_key)
+            || !valid_text(&saved.limit_id)
+            || !stable_limit_id(&saved.limit_id)
+            || saved.window_seconds == Some(0)
+            || !valid_timestamp(saved.armed_at)
+            || !valid_timestamp(saved.last_observed_at)
+        {
+            return None;
+        }
+        Some(Self {
+            provider: saved.provider,
+            account_key: saved.account_key.clone(),
+            limit_id: saved.limit_id.clone(),
+            window_seconds: saved.window_seconds,
+            armed_at: saved.armed_at,
+            last_observed_at: saved.last_observed_at,
+            state: WatchState::Waiting,
+        })
     }
 
     pub fn cancel(&mut self) {

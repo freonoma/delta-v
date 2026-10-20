@@ -7,8 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{Limit, LimitKind, Provenance, ProviderId, ProviderSnapshot};
 
-// Runtime integration follows the independently tested watch evaluator.
-#[cfg_attr(not(test), allow(dead_code))]
 pub mod availability;
 
 #[derive(Debug, PartialEq)]

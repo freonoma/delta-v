@@ -1,3 +1,5 @@
+mod availability_store;
+mod availability_watches;
 mod cooldown;
 mod credentials;
 mod history;
@@ -267,6 +269,64 @@ fn require_notification_settings(window: &tauri::WebviewWindow) -> Result<(), St
     }
 }
 
+fn require_availability_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if matches!(window.label(), "main" | "settings") {
+        Ok(())
+    } else {
+        Err("Manage availability watches in the usage panel or Settings.".into())
+    }
+}
+
+#[tauri::command]
+async fn get_availability_watch_state(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<notification_delivery::AvailabilityStatus, String> {
+    require_availability_window(&window)?;
+    notification_delivery::availability_state(&app).await
+}
+
+#[tauri::command]
+async fn prepare_availability_watch(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    provider: model::ProviderId,
+) -> Result<(), String> {
+    require_availability_window(&window)?;
+    notification_delivery::prepare_availability(&app, provider).await
+}
+
+#[tauri::command]
+async fn clear_availability_preparation(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    provider: model::ProviderId,
+) -> Result<(), String> {
+    require_availability_window(&window)?;
+    notification_delivery::clear_availability_preparation(&app, provider).await
+}
+
+#[tauri::command]
+async fn arm_availability_watch(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    provider: model::ProviderId,
+    limit_id: String,
+) -> Result<String, String> {
+    require_availability_window(&window)?;
+    notification_delivery::arm_availability(&app, provider, &limit_id).await
+}
+
+#[tauri::command]
+async fn cancel_availability_watch(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    id: String,
+) -> Result<(), String> {
+    require_availability_window(&window)?;
+    notification_delivery::cancel_availability(&app, &id).await
+}
+
 #[tauri::command]
 async fn get_notification_state(
     app: tauri::AppHandle,
@@ -431,6 +491,11 @@ fn main() -> tauri::Result<()> {
             set_notifications_enabled,
             send_test_notification,
             open_notification_settings,
+            get_availability_watch_state,
+            prepare_availability_watch,
+            clear_availability_preparation,
+            arm_availability_watch,
+            cancel_availability_watch,
             save_display_preferences,
             set_provider_selection,
             hide_popover,

@@ -8,11 +8,12 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use crate::{
+    availability_watches::WatchSummary,
     model::ProviderId,
-    notifications::LowAllowance,
+    notifications::{LowAllowance, availability::RecoveredAllowance},
     platform::notifications::{self as native, Authorization, Message, PermissionState},
     providers,
-    runtime::{self, NotificationTicket, Runtime},
+    runtime::{self, AvailabilityTicket, NotificationTicket, Runtime},
 };
 
 #[derive(Default)]
@@ -24,6 +25,7 @@ pub struct Delivery {
 #[derive(Default)]
 struct DeliveryState {
     error: Option<String>,
+    availability_error: Option<String>,
     last_test: Option<Instant>,
 }
 
@@ -32,6 +34,81 @@ pub struct NotificationStatus {
     enabled: bool,
     permission: Option<PermissionState>,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AvailabilityStatus {
+    watches: Vec<WatchSummary>,
+    permission: Option<PermissionState>,
+    error: Option<String>,
+}
+
+pub async fn availability_state(app: &AppHandle) -> Result<AvailabilityStatus, String> {
+    let delivery = app.state::<Delivery>();
+    let saved = delivery.actions.lock().await;
+    let watches = app.state::<Runtime>().availability_state()?;
+    let (permission, permission_error) = match remember_permission(app, native::state().await) {
+        Ok(permission) => (Some(permission), None),
+        Err(error) => (None, Some(error)),
+    };
+    Ok(AvailabilityStatus {
+        watches: watches.watches,
+        permission,
+        error: watches
+            .error
+            .or(permission_error)
+            .or_else(|| saved.availability_error.clone()),
+    })
+}
+
+pub async fn prepare_availability(app: &AppHandle, provider: ProviderId) -> Result<(), String> {
+    let delivery = app.state::<Delivery>();
+    let _saved = delivery.actions.lock().await;
+    app.state::<Runtime>().prepare_availability_watch(provider)
+}
+
+pub async fn clear_availability_preparation(
+    app: &AppHandle,
+    provider: ProviderId,
+) -> Result<(), String> {
+    let delivery = app.state::<Delivery>();
+    let _saved = delivery.actions.lock().await;
+    app.state::<Runtime>()
+        .clear_availability_preparation(provider)
+}
+
+pub async fn arm_availability(
+    app: &AppHandle,
+    provider: ProviderId,
+    limit_id: &str,
+) -> Result<String, String> {
+    let delivery = app.state::<Delivery>();
+    let mut saved = delivery.actions.lock().await;
+    let ticket = app
+        .state::<Runtime>()
+        .availability_arm_ticket(provider, limit_id)?;
+    let mut permission = remember_permission(app, native::state().await)?;
+    if should_request_permission(&permission) {
+        permission = remember_permission(app, native::request_authorization().await)?;
+    }
+    if let Some(error) = permission_error(&permission) {
+        return Err(error);
+    }
+    // Revalidate the accepted usage and account after the permission prompt.
+    let id = app.state::<Runtime>().arm_availability_watch(&ticket)?;
+    saved.availability_error = None;
+    runtime::publish(app);
+    Ok(id)
+}
+
+pub async fn cancel_availability(app: &AppHandle, id: &str) -> Result<(), String> {
+    let delivery = app.state::<Delivery>();
+    let mut saved = delivery.actions.lock().await;
+    // Cancellation does not depend on macOS being able to read notification permission.
+    app.state::<Runtime>().cancel_availability_watch(id)?;
+    saved.availability_error = None;
+    runtime::publish(app);
+    Ok(())
 }
 
 pub async fn state(app: &AppHandle) -> Result<NotificationStatus, String> {
@@ -154,6 +231,93 @@ pub fn observe(app: &AppHandle, ticket: NotificationTicket) {
         .await;
         saved.error = result.err().map(|error| error.to_string());
     });
+}
+
+pub fn observe_availability(app: &AppHandle, ticket: AvailabilityTicket) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let delivery = app.state::<Delivery>();
+        let mut saved = delivery.actions.lock().await;
+        let runtime = app.state::<Runtime>();
+        if !runtime.availability_ticket_current(&ticket) {
+            return;
+        }
+        let permission = remember_permission(&app, native::state().await);
+        let can_deliver = permission.as_ref().is_ok_and(PermissionState::can_deliver);
+        let candidates = match runtime.availability_candidates(&ticket, can_deliver) {
+            Ok(candidates) => candidates,
+            Err(_) => {
+                // Registry persistence errors are exposed by availability_state.
+                runtime::publish(&app);
+                return;
+            }
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        // Durable consumption has already happened. A failure or process exit below
+        // can miss a delivery, but must never replay this recovery after a restart.
+        runtime::publish(&app);
+        let mut failed = false;
+        for candidate in candidates {
+            if !runtime.availability_ticket_current(&ticket) {
+                return;
+            }
+            if candidate.resets_at <= providers::now() {
+                continue;
+            }
+            let provider = match candidate.provider {
+                ProviderId::Claude => "Claude",
+                ProviderId::Codex => "Codex",
+            };
+            let result = native::send(Message {
+                identifier: identifier(&delivery, "availability"),
+                title: format!("{provider} quota has allowance"),
+                body: availability_body(&candidate),
+            })
+            .await;
+            match result {
+                Err(error) => {
+                    saved.availability_error = Some(error.to_string());
+                    failed = true;
+                }
+                Ok(()) if !failed => saved.availability_error = None,
+                Ok(()) => {}
+            }
+        }
+    });
+}
+
+fn availability_body(candidate: &RecoveredAllowance) -> String {
+    let label = |text: &str| {
+        let mut bounded: String = text.chars().take(80).collect();
+        if text.chars().count() > 80 {
+            bounded.push_str("...");
+        }
+        bounded
+    };
+    let mut body = format!("{} reports remaining allowance.", label(&candidate.label));
+    let exhausted = &candidate.other_exhausted;
+    if let Some(first) = exhausted.first() {
+        let names = match exhausted.len() {
+            1 => label(&first.label),
+            2 => format!("{} and {}", label(&first.label), label(&exhausted[1].label)),
+            3 => format!(
+                "{}, {} and 1 more window",
+                label(&first.label),
+                label(&exhausted[1].label),
+            ),
+            count => format!(
+                "{}, {} and {} more windows",
+                label(&first.label),
+                label(&exhausted[1].label),
+                count - 2
+            ),
+        };
+        let verb = if exhausted.len() == 1 { "is" } else { "are" };
+        body.push_str(&format!(" {names} {verb} still reported as exhausted."));
+    }
+    body
 }
 
 fn identifier(delivery: &Delivery, kind: &str) -> String {
@@ -280,6 +444,46 @@ mod tests {
             remaining_percent: 19.99,
             resets_at: 2_000,
         }
+    }
+
+    #[test]
+    fn availability_wording_identifies_the_quota_without_claiming_provider_readiness() {
+        use crate::notifications::availability::ExhaustedQuota;
+        let mut recovered = RecoveredAllowance {
+            provider: ProviderId::Claude,
+            limit_id: "session".into(),
+            label: "5-hour".into(),
+            window_seconds: Some(18_000),
+            remaining_percent: 0.000_001,
+            resets_at: 2000,
+            observed_at: 1000,
+            other_exhausted: Vec::new(),
+        };
+        assert_eq!(
+            availability_body(&recovered),
+            "5-hour reports remaining allowance."
+        );
+        for label in ["Weekly", "Model", "Extra"] {
+            recovered.other_exhausted.push(ExhaustedQuota {
+                limit_id: label.into(),
+                label: label.into(),
+                window_seconds: None,
+            });
+        }
+        assert_eq!(
+            availability_body(&recovered),
+            "5-hour reports remaining allowance. Weekly, Model and 1 more window are still reported as exhausted."
+        );
+        recovered.other_exhausted.truncate(1);
+        assert_eq!(
+            availability_body(&recovered),
+            "5-hour reports remaining allowance. Weekly is still reported as exhausted."
+        );
+        recovered.label = "界".repeat(100);
+        assert!(availability_body(&recovered).starts_with(&format!(
+            "{}... reports remaining allowance.",
+            "界".repeat(80)
+        )));
     }
 
     #[test]
