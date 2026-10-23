@@ -18,6 +18,7 @@ import { BrandMark } from "./BrandMark";
 import { clientNames, issueStatuses, providerEnabled, providerNames, recoveryMessages } from "./provider-display";
 import { errorMessage, native, preview } from "./ui-state";
 import { defaultPanelPreferences, useAppController } from "./useAppController";
+import { useNativeAppearance } from "./useNativeAppearance";
 import { compactLimits, featuredQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, usedPercent, wholePercent } from "./usage";
 
 const provenanceNames: Record<Limit["provenance"], string> = {
@@ -149,7 +150,7 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
       <div className="provider-heading">
         <div className="provider-title">
           <h2>{providerNames[provider.id]}</h2>
-          {expanded && snapshot?.plan && <span className="plan-label">{snapshot.plan}</span>}
+          {(expanded || settings.ui_style === "glass") && snapshot?.plan && <span className="plan-label">{snapshot.plan}</span>}
         </div>
         <span className={`connection-status${snapshot && stale ? " stale" : ""}${busy ? " loading" : ""}${!snapshot ? " disconnected" : ""}`} title={snapshot ? `Updated ${sampleAge(snapshot.fetched_at, now)}` : status}>
           <span className="status-dot" />{status}
@@ -229,8 +230,12 @@ export default function App() {
   const lastSize = useRef("");
   const selection = state?.settings.providers ?? "both";
   const theme = state?.settings.theme ?? "system";
+  const uiStyle = state?.settings.ui_style ?? "glass";
+  const hasState = state !== null;
   const { pinned, mini, expanded: miniExpanded, layout: miniLayout } = panelPreferences ?? defaultPanelPreferences;
   const miniActive = mini && pinned && !historyOpen;
+
+  useNativeAppearance({ target: "panel", theme, uiStyle, ready: hasState, onError: setError });
 
   useEffect(() => {
     if (!native) return;
@@ -399,7 +404,7 @@ export default function App() {
   }
 
   return (
-    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme} data-pinned={pinned}
+    <div ref={shell} className="popover-shell" data-layout={selection} data-theme={theme} data-ui-style={uiStyle} data-pinned={pinned}
       data-mini={miniActive} data-mini-layout={miniLayout} data-history={historyOpen}
       tabIndex={-1} data-keyboard-navigation={keyboardNavigation}
       onPointerDownCapture={() => {

@@ -1,6 +1,7 @@
 export type ProviderId = "claude" | "codex";
 export type ProviderSelection = ProviderId | "both";
 export type Theme = "system" | "light" | "dark";
+export type UiStyle = "glass" | "legacy";
 export type PercentageMode = "remaining" | "used";
 export type MiniLayout = "columns" | "stacked";
 export type HistoryRetention = "forever" | "days30" | "days90";
@@ -117,6 +118,7 @@ export interface Settings {
   threshold: number;
   refresh_seconds: number;
   theme: Theme;
+  ui_style: UiStyle;
   percentage_mode: PercentageMode;
   claude_windows: string[];
   codex_windows: string[];
@@ -141,7 +143,7 @@ export interface NotificationStatus {
 }
 
 export type DisplayPreferences = Pick<Settings,
-  "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "percentage_mode"
+  "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "ui_style" | "percentage_mode"
   | "claude_windows" | "codex_windows">;
 
 export interface Amount {

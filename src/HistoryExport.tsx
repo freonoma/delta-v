@@ -4,6 +4,7 @@ import { getHistoryPreview } from "./history-preview";
 import { exportDateLabel, exportFilename, renderHistoryPng } from "./history-export-image";
 import type { HistoryExportSeries, HistoryImageOptions } from "./history-export-image";
 import type { Settings } from "./types";
+import { Icon } from "./Icon";
 import "./HistoryExport.css";
 
 const native = isTauri();
@@ -171,7 +172,7 @@ export function HistoryExport({ series, settings, active }: { series: HistoryExp
     if (event.key === "Escape" && menu.current?.open) { event.stopPropagation(); menu.current.open = false; trigger.current?.focus(); }
   }}>
     <details ref={menu} className="history-export-menu">
-      <summary ref={trigger}>Export <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></summary>
+      <summary ref={trigger}>Export <Icon name="chevron" /></summary>
       <div className="history-export-options" role="group" aria-label="Export history">
         <button disabled={!ready} onClick={() => begin("image")}>Chart image…</button>
         <button disabled={!ready} onClick={() => begin("csv")}>Export readings…</button>

@@ -107,6 +107,8 @@ pub fn clear_quit_request(app: &AppHandle) {
 }
 
 pub fn destroyed(app: &AppHandle) {
+    // Window events run on the main thread, which owns native material state.
+    crate::platform::appearance::forget_window(WINDOW);
     clear_quit_request(app);
     if let Some(explicit) = app.state::<SettingsWindowState>().take_panel_return()
         && let Err(error) = crate::platform::return_from_settings(app, explicit)
@@ -269,9 +271,10 @@ fn open_on_main(
         let mut builder =
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(section.path().into()))
                 .title(section.title())
-                .title_bar_style(tauri::TitleBarStyle::Transparent)
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 .decorations(true)
+                .transparent(true)
                 .resizable(true)
                 .minimizable(false)
                 .maximizable(false)
@@ -302,8 +305,11 @@ fn open_on_main(
         }
         let window = builder.build()?;
         if let Ok(state) = app.state::<crate::runtime::Runtime>().state()
-            && let Err(error) =
-                crate::settings_appearance::apply_on_main(&window, state.settings.theme)
+            && let Err(error) = crate::settings_appearance::apply_on_main(
+                &window,
+                state.settings.theme,
+                state.settings.ui_style,
+            )
         {
             eprintln!("{error}");
         }

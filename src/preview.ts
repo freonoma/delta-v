@@ -88,7 +88,7 @@ export function createPreview(search = ""): AppState {
 
   return {
     revision: 0,
-    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", notifications_enabled: createNotificationPreview(search).enabled, history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: theme === "light" || theme === "dark" ? theme : "system", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
+    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", notifications_enabled: createNotificationPreview(search).enabled, history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: theme === "light" || theme === "dark" ? theme : "system", ui_style: parameters.get("style") === "legacy" ? "legacy" : "glass", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
     providers: [
       provider("claude", [
         quota("session", "5-hour", 0.36, 18000, parameters.get("expired") === "1" ? -60 : 8120),

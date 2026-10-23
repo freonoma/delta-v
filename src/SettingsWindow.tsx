@@ -14,11 +14,12 @@ import { Updates } from "./Updates";
 import { BrandMark } from "./BrandMark";
 import { Icon } from "./Icon";
 import { useAppController } from "./useAppController";
+import { useNativeAppearance } from "./useNativeAppearance";
 import { createSettingsDraft, isSettingsDraftDirty, reconcileSettingsDraft, validateSettingsDraft } from "./settings-draft";
 import type { SettingsDraft, SettingsDraftError } from "./settings-draft";
 import { isSettingsSection, settingsSections } from "./settings-navigation";
 import type { SettingsSection } from "./settings-navigation";
-import type { AppState, PanelPreferences, Theme } from "./types";
+import type { AppState, PanelPreferences, Theme, UiStyle } from "./types";
 import { errorMessage, native, preview } from "./ui-state";
 
 const sectionTitles: Record<SettingsSection, string> = {
@@ -62,7 +63,7 @@ function UnsavedChanges({ intent, busy, onKeepEditing, onDiscard, onSave }: {
   );
 }
 
-function SettingsEditor({ controller, state, panelPreferences, section, setSection, closeGuard, finishClose, onThemePreview }: {
+function SettingsEditor({ controller, state, panelPreferences, section, setSection, closeGuard, finishClose, onThemePreview, onStylePreview }: {
   controller: ReturnType<typeof useAppController>;
   state: AppState;
   panelPreferences: PanelPreferences;
@@ -71,6 +72,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
   closeGuard: RefObject<((intent: CloseIntent) => void) | null>;
   finishClose: (intent: CloseIntent) => Promise<void>;
   onThemePreview: (theme: Theme | null) => void;
+  onStylePreview: (style: UiStyle | null) => void;
 }) {
   const { now, login, updates, saving, panelBusy, pendingRecovery, pendingConnection,
     saveDisplayPreferences, savePanelPreferences, updateHistoryPreferences, setProviderEnabled,
@@ -103,6 +105,8 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
 
   useEffect(() => { onThemePreview(form.draft.preferences.theme); }, [form.draft.preferences.theme, onThemePreview]);
   useEffect(() => () => onThemePreview(null), [onThemePreview]);
+  useEffect(() => { onStylePreview(form.draft.preferences.ui_style); }, [form.draft.preferences.ui_style, onStylePreview]);
+  useEffect(() => () => onStylePreview(null), [onStylePreview]);
   useEffect(() => { content.current?.scrollTo({ top: 0 }); }, [section]);
 
   const requestClose = useCallback((intent: CloseIntent) => {
@@ -236,8 +240,10 @@ export function SettingsWindow() {
     return isSettingsSection(requested) ? requested : "display";
   });
   const [themePreview, setThemePreview] = useState<Theme | null>(null);
+  const [stylePreview, setStylePreview] = useState<UiStyle | null>(null);
   const closeGuard = useRef<((intent: CloseIntent) => void) | null>(null);
   const theme = themePreview ?? state?.settings.theme ?? "system";
+  const uiStyle = stylePreview ?? state?.settings.ui_style ?? "glass";
   const hasState = state !== null;
 
   const finishClose = useCallback(async (intent: CloseIntent) => {
@@ -267,13 +273,7 @@ export function SettingsWindow() {
     return () => { disposed = true; };
   }, [section, setError]);
 
-  useEffect(() => {
-    if (!native || !hasState) return;
-    let disposed = false;
-    void invoke("set_settings_appearance", { theme })
-      .catch((caught: unknown) => { if (!disposed) setError(errorMessage(caught)); });
-    return () => { disposed = true; };
-  }, [theme, hasState, setError]);
+  useNativeAppearance({ target: "settings", theme, uiStyle, ready: hasState, onError: setError });
 
   useEffect(() => {
     if (!native) return;
@@ -315,7 +315,12 @@ export function SettingsWindow() {
   }, [requestClose]);
 
   return (
-    <div className="settings-window" data-theme={theme}>
+    <div className="settings-window" data-theme={theme} data-ui-style={uiStyle}>
+      {native && <div className="settings-titlebar" aria-hidden="true" onMouseDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        void getCurrentWindow().startDragging().catch((caught: unknown) => setError(errorMessage(caught)));
+      }} />}
       <aside className="settings-sidebar">
         <div className="brand settings-brand"><BrandMark /><h1>Delta-V</h1></div>
         <p className="settings-sidebar-title">Settings</p>
@@ -348,7 +353,7 @@ export function SettingsWindow() {
         </header>
         {panelReady && state && panelPreferences ? <SettingsEditor controller={controller} state={state}
           panelPreferences={panelPreferences} section={section} setSection={setSection} closeGuard={closeGuard}
-          finishClose={finishClose} onThemePreview={setThemePreview} /> : <div className="settings-section-content">
+          finishClose={finishClose} onThemePreview={setThemePreview} onStylePreview={setStylePreview} /> : <div className="settings-section-content">
           <p role="status">{controller.error ? "Settings could not be loaded." : "Loading settings…"}</p>
           {controller.error && <><p className="settings-validation" role="alert">{controller.error}</p>
             <button className="text-button" onClick={() => void controller.retryInitialRead()}>Try again</button></>}

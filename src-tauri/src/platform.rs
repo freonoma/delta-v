@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "macos"))]
 compile_error!("Delta-V currently supports macOS only.");
 
+pub mod appearance;
 pub mod auth;
 pub mod calendar;
 mod claude_auth;

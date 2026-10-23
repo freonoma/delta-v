@@ -45,6 +45,7 @@ export function isSettingsDraftDirty(draft: SettingsDraft, baseline: SettingsDra
   const saved = baseline.preferences;
   return current.tracked_limit !== saved.tracked_limit
     || current.theme !== saved.theme
+    || current.ui_style !== saved.ui_style
     || current.percentage_mode !== saved.percentage_mode
     || !sameWindows(current.claude_windows, saved.claude_windows)
     || !sameWindows(current.codex_windows, saved.codex_windows)
@@ -82,6 +83,7 @@ export function reconcileSettingsDraft(draft: SettingsDraft, baseline: SettingsD
     preferences: {
       tracked_limit: current.tracked_limit === saved.tracked_limit ? next.tracked_limit : current.tracked_limit,
       theme: current.theme === saved.theme ? next.theme : current.theme,
+      ui_style: current.ui_style === saved.ui_style ? next.ui_style : current.ui_style,
       percentage_mode: current.percentage_mode === saved.percentage_mode ? next.percentage_mode : current.percentage_mode,
       claude_windows: [...(sameWindows(current.claude_windows, saved.claude_windows) ? next.claude_windows : current.claude_windows)],
       codex_windows: [...(sameWindows(current.codex_windows, saved.codex_windows) ? next.codex_windows : current.codex_windows)],

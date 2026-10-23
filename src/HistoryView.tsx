@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { HistoryChart } from "./HistoryChart";
 import { HistoryExport } from "./HistoryExport";
+import { Icon } from "./Icon";
 import type { HistoryExportSeries } from "./history-export-image";
 import { getHistoryPreview } from "./history-preview";
 import { wholePercent } from "./usage";
@@ -284,7 +285,7 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
     }}>
       <div className="history-titlebar">
         <div><button className="icon-button history-back" aria-label="Back to usage" title="Back to usage" onClick={onClose}>
-          <svg className="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m11 5-5 5 5 5M6 10h10" /></svg>
+          <Icon name="back" />
         </button><h2 ref={title} tabIndex={-1} id="history-title">Usage history</h2></div>
         <div className="history-title-actions"><button className="text-button history-manage" onClick={onSettings}>Manage history</button>
           <HistoryExport series={readySeries} settings={settings} active={active} /></div>
@@ -313,7 +314,7 @@ export function HistoryView({ settings, providers, active, onChange, onSettings,
         <button className="text-button" disabled={pending} onClick={() => void startRecording()}>{pending ? "Resuming" : "Resume recording"}</button></div>}
       {loading && !catalog ? <div className="history-empty" role="status"><h3>Reading saved history</h3></div>
         : empty ? <div className="history-empty">
-          <svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M5 5v22h23M9 21l6-8 5 3 7-9" /></svg>
+          <svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 5v22h23M9 21l6-8 5 3 7-9" /></svg>
           <h3>{state.recording ? "Waiting for the next reading" : "Save your usage history"}</h3>
           <p>{state.recording ? "Recording is on. Your first successful usage check will appear here. Earlier activity cannot be filled in."
             : "Keep usage readings on this Mac to see how your allowance changes. No conversations or sign-in tokens are saved."}</p>

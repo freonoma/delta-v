@@ -108,7 +108,7 @@ By default, the menu bar tracks the most-used available window among the selecte
 
 The percentages and bar fill change colour when less than 20% remains. When showing remaining usage, the bar is empty at 0%, so the warning colour appears on the numbers. Change **Settings → Display & usage → Low allowance threshold**, then choose **Save changes** to apply it to highlighting and enabled low-allowance alerts. It always refers to what remains, even when you choose to display the percentage used. The menu bar icon itself follows the normal macOS colour.
 
-**Appearance**, under **Display & usage**, offers Light, Dark, or System, which follows your Mac's appearance. Changes preview in the Settings window. **Save changes** applies them to the usage panel too; **Discard changes** restores the saved appearance.
+**Interface style**, under **Display & usage**, offers **Glass**, the default, with translucent surfaces and native Liquid Glass on macOS 26 or later (popover blur on earlier versions), or **Legacy**, the original Delta-V look. Both support **Light**, **Dark**, or **System** appearance, which follows your Mac. Changes preview in the Settings window. **Save changes** applies them to the usage panel too; **Discard changes** restores the saved style and appearance. Glass respects macOS Reduce Transparency and reduced-motion preferences.
 
 **Settings → App → Startup → Launch at login** opens Delta-V when you log in to your Mac. A saved pinned panel reappears; otherwise, the app starts quietly in the menu bar. This switch takes effect immediately. If macOS needs your approval, choose **Open Login Items** and allow Delta-V there. The app reads the macOS setting again when you return, including changes you make outside Delta-V.
 
@@ -313,6 +313,7 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `threshold` | `20` | Low allowance threshold, from 0 to 100% remaining; the saved value controls highlighting and enabled notifications watch for crossings below it |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; routine Claude checks have a 300-second minimum. Idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
+| `ui_style` | `"glass"` | `"glass"` for translucent surfaces, or `"legacy"` for the original look |
 | `notifications_enabled` | `false` | Local low-allowance alerts for both connected providers; macOS alert permission is also required |
 | `history_recording` | `false` | Save new quota readings locally for both connected providers |
 | `history_retention` | `"forever"` | `"forever"`, `"days30"`, or `"days90"`; shorter retention also removes older saved readings |

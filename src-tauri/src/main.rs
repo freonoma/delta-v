@@ -51,8 +51,18 @@ async fn close_settings_window(
 async fn set_settings_appearance(
     window: tauri::WebviewWindow,
     theme: settings::Theme,
+    ui_style: settings::UiStyle,
 ) -> Result<(), String> {
-    settings_appearance::apply(window, theme).await
+    settings_appearance::apply(window, theme, ui_style).await
+}
+
+#[tauri::command]
+async fn set_panel_appearance(
+    window: tauri::WebviewWindow,
+    theme: settings::Theme,
+    ui_style: settings::UiStyle,
+) -> Result<(), String> {
+    platform::appearance::apply(window, theme, ui_style).await
 }
 
 #[tauri::command]
@@ -463,6 +473,7 @@ fn main() -> tauri::Result<()> {
             open_settings_window,
             close_settings_window,
             set_settings_appearance,
+            set_panel_appearance,
             set_settings_section,
             get_update_state,
             check_for_updates,

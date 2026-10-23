@@ -16,6 +16,7 @@ export function displayPreferences(settings: DisplayPreferences): DisplayPrefere
     threshold: settings.threshold,
     refresh_seconds: settings.refresh_seconds,
     theme: settings.theme,
+    ui_style: settings.ui_style,
     percentage_mode: settings.percentage_mode,
     claude_windows: [...settings.claude_windows],
     codex_windows: [...settings.codex_windows],

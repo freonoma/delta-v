@@ -70,6 +70,24 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
 
   return (
     <>
+      <fieldset className="style-picker">
+        <legend>Interface style</legend>
+        <p>Make Delta-V feel at home. Preview here, then save to apply.</p>
+        <div className="style-picker-options">
+          {(["glass", "legacy"] as const).map((style) => (
+            <label key={style} className="style-option">
+              <input type="radio" name="ui-style" value={style} checked={draft.ui_style === style}
+                onChange={() => setDraft({ ...draft, ui_style: style })} />
+              <span className={`style-swatch style-swatch-${style}`} aria-hidden="true">
+                <span className="swatch-panel"><i /><span><b /><b /></span></span>
+              </span>
+              <span className="style-option-copy"><strong>{style === "glass" ? "Glass" : "Legacy"}</strong>
+                <small>{style === "glass" ? "Soft light, layered surfaces" : "The original Delta-V look"}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <label className="setting-row">
         <span>Menu bar tracks<small>Choose a usage window</small></span>
         <select value={tracked} onChange={(event) => setDraft({ ...draft, tracked_limit: event.target.value })}>

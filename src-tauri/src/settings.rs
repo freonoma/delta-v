@@ -34,6 +34,14 @@ pub enum Theme {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+pub enum UiStyle {
+    #[default]
+    Glass,
+    Legacy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PercentageMode {
     #[default]
     Remaining,
@@ -52,6 +60,7 @@ pub struct Settings {
     pub threshold: u8,
     pub refresh_seconds: u64,
     pub theme: Theme,
+    pub ui_style: UiStyle,
     pub percentage_mode: PercentageMode,
     pub claude_windows: Vec<String>,
     pub codex_windows: Vec<String>,
@@ -68,6 +77,7 @@ pub struct DisplayPreferences {
     pub threshold: u8,
     pub refresh_seconds: u64,
     pub theme: Theme,
+    pub ui_style: UiStyle,
     pub percentage_mode: PercentageMode,
     pub claude_windows: Vec<String>,
     pub codex_windows: Vec<String>,
@@ -80,6 +90,7 @@ impl DisplayPreferences {
             threshold: self.threshold,
             refresh_seconds: self.refresh_seconds,
             theme: self.theme,
+            ui_style: self.ui_style,
             percentage_mode: self.percentage_mode,
             claude_windows: self.claude_windows,
             codex_windows: self.codex_windows,
@@ -100,6 +111,7 @@ impl From<&Settings> for DisplayPreferences {
             threshold: settings.threshold,
             refresh_seconds: settings.refresh_seconds,
             theme: settings.theme,
+            ui_style: settings.ui_style,
             percentage_mode: settings.percentage_mode,
             claude_windows: settings.claude_windows.clone(),
             codex_windows: settings.codex_windows.clone(),
@@ -118,6 +130,7 @@ impl Default for Settings {
             threshold: 20,
             refresh_seconds: 60,
             theme: Theme::System,
+            ui_style: UiStyle::Glass,
             percentage_mode: PercentageMode::Remaining,
             claude_windows: Vec::new(),
             codex_windows: Vec::new(),
@@ -272,9 +285,11 @@ mod tests {
             expanded[field] = serde_json::json!(true);
             assert!(serde_json::from_value::<DisplayPreferences>(expanded).is_err());
         }
-        let mut incomplete = payload;
-        incomplete.as_object_mut().unwrap().remove("theme");
-        assert!(serde_json::from_value::<DisplayPreferences>(incomplete).is_err());
+        for field in ["theme", "ui_style"] {
+            let mut incomplete = payload.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<DisplayPreferences>(incomplete).is_err());
+        }
     }
 
     #[test]
@@ -353,6 +368,7 @@ mod tests {
         assert_eq!(settings.refresh_seconds, 60);
         assert_eq!(settings.tracked_limit, "auto");
         assert_eq!(settings.percentage_mode, PercentageMode::Remaining);
+        assert_eq!(settings.ui_style, UiStyle::Glass);
         assert!(settings.claude_windows.is_empty());
         assert!(settings.codex_windows.is_empty());
         assert!(settings.claude_enabled);
@@ -361,6 +377,58 @@ mod tests {
         assert!(!settings.history_recording);
         assert!(!settings.notifications_enabled);
         assert_eq!(settings.history_retention, Retention::Forever);
+    }
+
+    #[test]
+    fn ui_style_defaults_to_glass_and_migrates_without_changing_existing_preferences() {
+        assert_eq!(Settings::default().ui_style, UiStyle::Glass);
+        let old_settings = "providers = 'claude'\nthreshold = 15\ntheme = 'dark'\npercentage_mode = 'used'\nclaude_windows = ['weekly']";
+        let settings: Settings = toml::from_str(old_settings).unwrap();
+        assert_eq!(settings.ui_style, UiStyle::Glass);
+        assert_eq!(settings.providers, ProviderSelection::Claude);
+        assert_eq!(settings.threshold, 15);
+        assert_eq!(settings.theme, Theme::Dark);
+        assert_eq!(settings.percentage_mode, PercentageMode::Used);
+        assert_eq!(settings.claude_windows, vec!["weekly"]);
+    }
+
+    #[test]
+    fn ui_styles_round_trip_and_display_changes_preserve_other_preferences() {
+        for ui_style in [UiStyle::Glass, UiStyle::Legacy] {
+            let current = Settings {
+                providers: ProviderSelection::Claude,
+                claude_enabled: false,
+                notifications_enabled: true,
+                history_recording: true,
+                history_retention: Retention::Days90,
+                theme: Theme::Dark,
+                ..Settings::default()
+            };
+            let mut draft = DisplayPreferences::from(&current);
+            draft.ui_style = ui_style;
+            let updated = draft.apply_to(&current).unwrap();
+            assert_eq!(
+                updated,
+                Settings {
+                    ui_style,
+                    ..current
+                }
+            );
+            let saved = toml::to_string(&updated).unwrap();
+            assert_eq!(toml::from_str::<Settings>(&saved).unwrap(), updated);
+            let payload = serde_json::to_value(DisplayPreferences::from(&updated)).unwrap();
+            assert_eq!(
+                payload["ui_style"],
+                if ui_style == UiStyle::Glass {
+                    "glass"
+                } else {
+                    "legacy"
+                }
+            );
+            let restored: DisplayPreferences = serde_json::from_value(payload).unwrap();
+            assert_eq!(restored.ui_style, ui_style);
+        }
+        assert!(toml::from_str::<Settings>("ui_style = 'unknown'").is_err());
     }
 
     #[test]

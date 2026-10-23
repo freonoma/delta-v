@@ -11,6 +11,22 @@
   line-height: 1.45;
 }
 
+/* The native material extends beneath the titlebar; keep controls below it. */
+.native-app .settings-window {
+  position: relative;
+  padding-top: 28px;
+}
+
+.settings-titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 80px;
+  height: 28px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .settings-window[hidden],
 .settings-window [hidden] {
   display: none !important;

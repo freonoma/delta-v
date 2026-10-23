@@ -2479,6 +2479,7 @@ mod tests {
                 threshold: 15,
                 refresh_seconds: 120,
                 theme: settings::Theme::Dark,
+                ui_style: settings::UiStyle::Legacy,
                 percentage_mode: PercentageMode::Used,
                 claude_windows: vec!["session".into(), "weekly".into()],
                 codex_windows: vec!["weekly".into()],
@@ -2519,6 +2520,7 @@ mod tests {
             assert_eq!(saved.threshold, draft.threshold);
             assert_eq!(saved.refresh_seconds, draft.refresh_seconds);
             assert_eq!(saved.theme, draft.theme);
+            assert_eq!(saved.ui_style, draft.ui_style);
             assert_eq!(saved.percentage_mode, draft.percentage_mode);
             assert_eq!(saved.claude_windows, draft.claude_windows);
             assert_eq!(saved.codex_windows, draft.codex_windows);

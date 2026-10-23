@@ -9,23 +9,23 @@ const settings = {
   providers: "both", claude_enabled: true, codex_enabled: true,
   launch_at_login_prompt_dismissed: false, history_recording: false, notifications_enabled: false,
   history_retention: "forever", tracked_limit: "codex:weekly", threshold: 20,
-  refresh_seconds: 60, theme: "system", percentage_mode: "remaining",
+  refresh_seconds: 60, theme: "system", ui_style: "glass", percentage_mode: "remaining",
   claude_windows: [], codex_windows: [],
 };
 
 test("an old display draft cannot carry immediate preferences into its save payload", () => {
-  const draft = { ...settings, theme: "dark", claude_windows: ["session"] };
+  const draft = { ...settings, theme: "dark", ui_style: "legacy", claude_windows: ["session"] };
   const payload = displayPreferences(draft);
   assert.deepEqual(payload, {
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
-    theme: "dark", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
+    theme: "dark", ui_style: "legacy", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
   });
   draft.claude_windows.push("weekly");
   assert.deepEqual(payload.claude_windows, ["session"]);
 });
 
 test("display and provider changes preserve immediate preferences in either save order", () => {
-  const draft = displayPreferences({ ...settings, theme: "dark", threshold: 15 });
+  const draft = displayPreferences({ ...settings, theme: "dark", ui_style: "legacy", threshold: 15 });
   const current = {
     ...settings, claude_enabled: false, codex_enabled: false,
     launch_at_login_prompt_dismissed: true, history_recording: true, history_retention: "days30", notifications_enabled: true,
@@ -34,14 +34,14 @@ test("display and provider changes preserve immediate preferences in either save
   const providerFirst = previewDisplayPreferences(previewProviderSelection(current, "claude"), draft);
   assert.deepEqual(displayFirst, providerFirst);
   assert.deepEqual(providerFirst, {
-    ...current, providers: "claude", tracked_limit: "auto", theme: "dark", threshold: 15,
+    ...current, providers: "claude", tracked_limit: "auto", theme: "dark", ui_style: "legacy", threshold: 15,
   });
 });
 
 test("provider selection preserves newly saved display choices and compatible tracking", () => {
   const current = previewDisplayPreferences(settings, {
     ...displayPreferences(settings), threshold: 10, refresh_seconds: 120,
-    percentage_mode: "used", codex_windows: ["weekly"],
+    ui_style: "legacy", percentage_mode: "used", codex_windows: ["weekly"],
   });
   assert.deepEqual(previewProviderSelection(current, "codex"), { ...current, providers: "codex" });
 });

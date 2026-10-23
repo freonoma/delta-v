@@ -9,7 +9,7 @@ function settings(changes = {}) {
     providers: "both", claude_enabled: true, codex_enabled: true,
     launch_at_login_prompt_dismissed: false, history_recording: false, history_retention: "forever", notifications_enabled: false,
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
-    theme: "system", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
+    theme: "system", ui_style: "glass", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
     ...changes,
   };
 }
@@ -20,7 +20,7 @@ test("drafts and save payloads contain only form-owned preferences and independe
   assert.deepEqual(draft, {
     preferences: {
       tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
-      theme: "system", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
+      theme: "system", ui_style: "glass", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
     },
     threshold: "20", interval: "60", layout: "columns",
   });
@@ -37,7 +37,7 @@ test("dirty checks compare each owned field and preserve window order", () => {
   const baseline = createSettingsDraft(settings(), "columns");
   assert.equal(isSettingsDraftDirty(createSettingsDraft(settings(), "columns"), baseline), false);
   for (const change of [
-    { tracked_limit: "auto" }, { theme: "dark" }, { percentage_mode: "used" },
+    { tracked_limit: "auto" }, { theme: "dark" }, { ui_style: "legacy" }, { percentage_mode: "used" },
     { claude_windows: [] }, { codex_windows: ["weekly"] },
   ]) {
     const draft = { ...baseline, preferences: { ...baseline.preferences, ...change } };
@@ -110,7 +110,7 @@ test("reconciliation adopts each clean field independently and preserves edited 
     preferences: { ...baseline.preferences, claude_windows: ["weekly"], tracked_limit: "claude:weekly" },
   };
   const next = createSettingsDraft(settings({
-    threshold: 25, refresh_seconds: 120, theme: "light", percentage_mode: "used", tracked_limit: "auto",
+    threshold: 25, refresh_seconds: 120, theme: "light", ui_style: "legacy", percentage_mode: "used", tracked_limit: "auto",
     claude_windows: ["model"], codex_windows: ["weekly"],
   }), "stacked");
   const reconciled = reconcileSettingsDraft(draft, baseline, next);
@@ -151,18 +151,31 @@ test("advancing the baseline keeps local edits across repeated usage updates", (
 });
 
 test("save acknowledgements normalize submitted fields while preserving later edits", () => {
-  const submitted = createSettingsDraft(settings({ theme: "dark", threshold: 15 }), "stacked");
-  const acknowledged = createSettingsDraft(settings({ theme: "dark", threshold: 15, tracked_limit: "auto" }), "stacked");
+  const submitted = createSettingsDraft(settings({ theme: "dark", ui_style: "legacy", threshold: 15 }), "stacked");
+  const acknowledged = createSettingsDraft(settings({ theme: "dark", ui_style: "legacy", threshold: 15, tracked_limit: "auto" }), "stacked");
   const clean = reconcileSettingsDraft(submitted, submitted, acknowledged);
   assert.deepEqual(clean, acknowledged);
   assert.equal(isSettingsDraftDirty(clean, acknowledged), false);
   const editedDuringSave = {
     ...submitted, threshold: "10", layout: "columns",
-    preferences: { ...submitted.preferences, theme: "light", codex_windows: ["weekly"] },
+    preferences: { ...submitted.preferences, theme: "light", ui_style: "glass", codex_windows: ["weekly"] },
   };
   const reconciled = reconcileSettingsDraft(editedDuringSave, submitted, acknowledged);
   assert.deepEqual(reconciled, {
     ...editedDuringSave, preferences: { ...editedDuringSave.preferences, tracked_limit: "auto" },
   });
   assert.equal(isSettingsDraftDirty(reconciled, acknowledged), true);
+});
+
+test("an unsaved UI style survives unrelated updates and is included in the validated save", () => {
+  const baseline = createSettingsDraft(settings(), "columns");
+  const draft = { ...baseline, preferences: { ...baseline.preferences, ui_style: "legacy" } };
+  const next = createSettingsDraft(settings({ theme: "dark", threshold: 30 }), "stacked");
+  const reconciled = reconcileSettingsDraft(draft, baseline, next);
+  assert.equal(reconciled.preferences.ui_style, "legacy");
+  assert.equal(reconciled.preferences.theme, "dark");
+  assert.equal(isSettingsDraftDirty(reconciled, next), true);
+  const result = validateSettingsDraft(reconciled, "both");
+  assert.equal(result.error, null);
+  assert.equal(result.preferences.ui_style, "legacy");
 });
