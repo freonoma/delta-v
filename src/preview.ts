@@ -65,6 +65,7 @@ export function createPreview(search = ""): AppState {
   const stale = parameters.get("stale") ?? (resets === "mixed" ? "codex" : null);
   const theme = parameters.get("theme");
   const codexFiveHour = parameters.get("codex_5h") === "1";
+  const claudeUltra = parameters.get("claude_ultra") === "1";
   const watchPreview = parameters.has("watches");
   const quota = (id: string, label: string, used: number, duration: number, reset: number): Limit => ({
     id, label, kind: "quota", used_fraction: used, window_seconds: duration,
@@ -88,15 +89,15 @@ export function createPreview(search = ""): AppState {
 
   return {
     revision: 0,
-    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", notifications_enabled: createNotificationPreview(search).enabled, history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: "auto", threshold: 20, refresh_seconds: 60, theme: theme === "light" || theme === "dark" ? theme : "system", ui_style: parameters.get("style") === "legacy" ? "legacy" : "glass", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
+    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", notifications_enabled: createNotificationPreview(search).enabled, history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: claudeUltra ? "claude:session" : "auto", threshold: 20, refresh_seconds: 60, theme: theme === "light" || theme === "dark" ? theme : "system", ui_style: parameters.get("style") === "legacy" ? "legacy" : "glass", percentage_mode: "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
     providers: [
       provider("claude", [
-        quota("session", "5-hour", 0.36, 18000, parameters.get("expired") === "1" ? -60 : 8120),
-        quota("weekly", "Weekly", parameters.get("hidden_low") === "1" ? 0.92 : 0.62, 604800, 270120),
+        ...(!claudeUltra ? [quota("session", "5-hour", 0.36, 18000, parameters.get("expired") === "1" ? -60 : 8120)] : []),
+        quota("weekly", "Weekly", claudeUltra ? 0.97 : parameters.get("hidden_low") === "1" ? 0.92 : 0.62, 604800, 270120),
         quota("seven_day_sonnet", "Weekly · Sonnet", 0.21, 604800, 270120),
         { id: "unrecognized_field", label: "unrecognized_field", kind: "unknown", used_fraction: null,
           window_seconds: null, resets_at: null, provenance: "unknown", enabled: false, amount: null, detail: null },
-      ], "Max"),
+      ], claudeUltra ? "Ultra" : "Max"),
       provider("codex", [
         quota("rate_limit:primary_window", codexFiveHour ? "5-hour" : "Weekly", codexFiveHour ? 0.12 : 0.84, codexFiveHour ? 18000 : 604800, codexFiveHour ? 10830 : 138600),
         ...(codexFiveHour ? [quota("rate_limit:secondary_window", "Weekly", 0.84, 604800, 138600)] : []),

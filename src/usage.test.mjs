@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   eligibleQuota, featuredQuota, hiddenLowQuota, miniLimits,
-  quotaPercent, remainingPercent, usageCheckWait, usedPercent, wholePercent,
+  quotaPercent, remainingPercent, trackedQuota, usageCheckWait, usedPercent, wholePercent,
 } from "./usage.ts";
 
 const now = 1_800_000_000;
@@ -73,6 +73,57 @@ test("a missing tracked window does not select a different featured quota", () =
   const session = quota("session");
   assert.equal(featuredQuota("claude", [session], "claude:missing", now), undefined);
   assert.equal(featuredQuota("claude", [session], "codex:missing", now), session);
+});
+
+test("an absent Claude session uses the weekly reading even with a tighter model quota", () => {
+  const weekly = quota("weekly", 0.97, { label: "Weekly", window_seconds: 604_800 });
+  const model = quota("weekly:model:fable", 1);
+  const limits = [weekly, model];
+  assert.equal(trackedQuota("claude", limits, "claude:session", now), weekly);
+  assert.equal(featuredQuota("claude", limits, "claude:session", now), weekly);
+  assert.equal(remainingPercent(featuredQuota("claude", limits, "claude:session", now)), 3);
+  assert.equal(featuredQuota("claude", limits, "auto", now), model);
+  assert.deepEqual(miniLimits("claude", limits, [], "claude:session", now), [weekly]);
+  assert.equal(featuredQuota("claude", limits, "claude:missing", now), undefined);
+  assert.equal(featuredQuota("codex", limits, "codex:session", now), undefined);
+});
+
+test("a returning Claude session resumes tracking without changing the saved choice", () => {
+  const tracked = "claude:session";
+  const weekly = quota("weekly", 0.97);
+  const session = quota("session", 0.1);
+  assert.equal(featuredQuota("claude", [weekly], tracked, now), weekly);
+  assert.equal(featuredQuota("claude", [weekly, session], tracked, now), session);
+});
+
+test("a reported but unusable Claude session never falls back to weekly", () => {
+  const weekly = quota("weekly");
+  const unusable = [
+    quota("session", null), quota("session", NaN), quota("session", 1.1),
+    quota("session", 0.5, { resets_at: now }),
+    quota("session", 0.5, { enabled: false }),
+    quota("session", 0.5, { kind: "unknown" }),
+    quota("session", 0.5, { provenance: "local_estimate" }),
+  ];
+  for (const session of unusable) {
+    assert.equal(featuredQuota("claude", [session, weekly], "claude:session", now), undefined);
+  }
+});
+
+test("Claude session fallback requires an eligible all-model weekly reading", () => {
+  const model = quota("weekly:model:fable", 0.9);
+  assert.equal(featuredQuota("claude", [model], "claude:session", now), undefined);
+  assert.equal(featuredQuota("claude", [], "claude:session", now), undefined);
+  const unusable = [
+    quota("weekly", null), quota("weekly", NaN), quota("weekly", -0.1),
+    quota("weekly", 0.5, { resets_at: now }),
+    quota("weekly", 0.5, { enabled: false }),
+    quota("weekly", 0.5, { kind: "credits" }),
+    quota("weekly", 0.5, { provenance: "unknown" }),
+  ];
+  for (const weekly of unusable) {
+    assert.equal(featuredQuota("claude", [weekly, model], "claude:session", now), undefined);
+  }
 });
 
 test("hidden warnings follow the tightest hidden quota even after expansion", () => {

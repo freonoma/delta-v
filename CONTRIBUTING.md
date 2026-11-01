@@ -44,6 +44,8 @@ For connection help, use `?issue=credential_access&provider=both` or `?issue=con
 
 For usage-check waits, use `?issue=rate_limited&provider=claude`, with `&stale=claude` to keep a cached reading. Add `&retry=ready` for an elapsed wait or `&retry=checking` for a check in progress. Check the panel, mini view and Settings Accounts in both appearances (`&theme=light` or `&theme=dark`), including a cached quota past its reset with `&expired=1`. A wait ending must not imply a successful reading or refilled allowance. Check the named-provider menu bar tooltip separately in macOS.
 
+For Claude Ultra, use `?claude_ultra=1`. This fixture omits the session window while retaining a saved `claude:session` menu bar choice. The Claude headline and tracked indicator should use Weekly, and **Settings → Display & usage** should explain the fallback. Check both appearances, single-provider and side-by-side layouts, and automatic mini view. Add `&resets=elapsed` to confirm an expired weekly reading stays unavailable. Explicit compact-window choices remain unchanged.
+
 For Upcoming resets, open `http://127.0.0.1:1420/?resets=mixed`, then expand **Upcoming resets** below **Show more**. These fixtures use synthetic quota readings:
 
 | `resets` value | Preview |

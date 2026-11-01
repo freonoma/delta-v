@@ -1944,6 +1944,16 @@ fn tray_reading(view: &AppState, now: i64) -> Option<Reading> {
         })
         .flat_map(|state| {
             state.snapshot.iter().flat_map(move |snapshot| {
+                // Verified Ultra accounts no longer report a session window. Keep an
+                // existing session preference useful without hiding invalid readings.
+                let tracked_limit = if state.id == ProviderId::Claude
+                    && view.settings.tracked_limit == "claude:session"
+                    && !snapshot.limits.iter().any(|limit| limit.id == "session")
+                {
+                    "claude:weekly"
+                } else {
+                    &view.settings.tracked_limit
+                };
                 snapshot.limits.iter().filter_map(move |limit| {
                     let provider = match state.id {
                         ProviderId::Claude => "claude",
@@ -1953,8 +1963,8 @@ fn tray_reading(view: &AppState, now: i64) -> Option<Reading> {
                         || limit.kind != LimitKind::Quota
                         || limit.provenance != Provenance::Official
                         || limit.resets_at.is_some_and(|reset| reset <= now)
-                        || (view.settings.tracked_limit != "auto"
-                            && view.settings.tracked_limit != format!("{provider}:{}", limit.id))
+                        || (tracked_limit != "auto"
+                            && tracked_limit != format!("{provider}:{}", limit.id))
                     {
                         return None;
                     }
@@ -2761,6 +2771,80 @@ mod tests {
         assert!((reading.remaining - 19.0).abs() < 0.00001);
         inner.view.settings.tracked_limit = "claude:missing".into();
         assert!(tray_reading(&inner.view, 150).is_none());
+    }
+
+    #[test]
+    fn tray_uses_weekly_when_claude_stops_reporting_the_tracked_session() {
+        let mut view = inner().view;
+        view.settings.tracked_limit = "claude:session".into();
+        let snapshot = view.providers[0].snapshot.as_mut().unwrap();
+        let weekly = &mut snapshot.limits[0];
+        weekly.id = "weekly".into();
+        weekly.label = "Weekly".into();
+        weekly.window_seconds = Some(604800);
+        weekly.used_fraction = Some(0.97);
+        let mut scoped = weekly.clone();
+        scoped.id = "weekly:model:fable".into();
+        scoped.label = "Weekly · Fable".into();
+        scoped.used_fraction = Some(0.99);
+        snapshot.limits.push(scoped);
+
+        let reading = tray_reading(&view, 150).unwrap();
+        assert_eq!(reading.label, "Claude · Weekly");
+        assert_eq!(reading.remaining, 3.0);
+        assert!(!reading.stale);
+        assert_eq!(view.settings.tracked_limit, "claude:session");
+        assert_eq!(
+            tray_tooltip(&view, Some(&reading)),
+            "Delta-V: 3% remaining\nClaude · Weekly"
+        );
+
+        view.providers[0].stale = true;
+        assert!(tray_reading(&view, 150).unwrap().stale);
+        for tracked in ["claude:missing", "codex:session"] {
+            view.settings.tracked_limit = tracked.into();
+            assert!(tray_reading(&view, 150).is_none());
+        }
+    }
+
+    #[test]
+    fn tray_weekly_fallback_requires_an_eligible_weekly_quota() {
+        for reason in 0..7 {
+            let mut view = inner().view;
+            view.settings.tracked_limit = "claude:session".into();
+            let weekly = &mut view.providers[0].snapshot.as_mut().unwrap().limits[0];
+            weekly.id = "weekly".into();
+            match reason {
+                0 => weekly.enabled = false,
+                1 => weekly.kind = LimitKind::Unknown,
+                2 => weekly.provenance = Provenance::LocalEstimate,
+                3 => weekly.used_fraction = None,
+                4 => weekly.used_fraction = Some(f64::NAN),
+                5 => weekly.used_fraction = Some(1.1),
+                _ => weekly.resets_at = Some(150),
+            }
+            assert!(tray_reading(&view, 150).is_none());
+        }
+    }
+
+    #[test]
+    fn tray_does_not_replace_an_ineligible_claude_session_with_weekly() {
+        for reason in 0..5 {
+            let mut view = inner().view;
+            view.settings.tracked_limit = "claude:session".into();
+            let limits = &mut view.providers[0].snapshot.as_mut().unwrap().limits;
+            let mut weekly = limits[0].clone();
+            weekly.id = "weekly".into();
+            limits.push(weekly);
+            match reason {
+                0 => limits[0].enabled = false,
+                1 => limits[0].kind = LimitKind::Unknown,
+                2 => limits[0].provenance = Provenance::LocalEstimate,
+                3 => limits[0].used_fraction = None,
+                _ => limits[0].resets_at = Some(150),
+            }
+            assert!(tray_reading(&view, 150).is_none());
+        }
     }
 
     #[test]

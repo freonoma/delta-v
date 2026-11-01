@@ -69,13 +69,24 @@ export function compactLimits(provider: ProviderId, limits: Limit[], featured: L
   return visible;
 }
 
+export function trackedQuota(provider: ProviderId, limits: Limit[], tracked: string, now: number): Limit | undefined {
+  const chosen = limits.find((limit) => tracked === `${provider}:${limit.id}` && eligibleQuota(limit, now));
+  if (chosen) return chosen;
+  // Verified Ultra accounts can stop reporting a session window. Keep the saved
+  // preference so it applies again if that window returns, but label the weekly reading.
+  if (provider === "claude" && tracked === "claude:session" && !limits.some((limit) => limit.id === "session")) {
+    return limits.find((limit) => limit.id === "weekly" && eligibleQuota(limit, now));
+  }
+  return undefined;
+}
+
 export function featuredQuota(provider: ProviderId, limits: Limit[], tracked: string, now: number): Limit | undefined {
+  if (tracked.startsWith(`${provider}:`)) return trackedQuota(provider, limits, tracked, now);
   const quotas = limits.filter((limit) => eligibleQuota(limit, now));
-  const chosen = quotas.find((limit) => tracked === `${provider}:${limit.id}`);
   const tightest = quotas.reduce<Limit | undefined>((current, limit) =>
     !current || (usedPercent(limit) ?? 0) > (usedPercent(current) ?? 0) ? limit : current,
   undefined);
-  return tracked.startsWith(`${provider}:`) ? chosen : tightest;
+  return tightest;
 }
 
 export function miniLimits(provider: ProviderId, limits: Limit[], selected: string[], tracked: string, now: number): Array<Limit | undefined> {

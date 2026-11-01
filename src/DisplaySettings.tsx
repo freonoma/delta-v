@@ -2,7 +2,7 @@ import type { AppState, DisplayPreferences, MiniLayout, ProviderState, Theme } f
 import type { SettingsDraftError } from "./settings-draft";
 import { visibleTrackedLimit } from "./preference-state";
 import { providerNames } from "./provider-display";
-import { eligibleQuota } from "./usage";
+import { eligibleQuota, trackedQuota } from "./usage";
 
 function WindowPicker({ provider, selected, onChange }: { provider: ProviderState; selected: string[]; onChange: (windows: string[]) => void }) {
   const name = providerNames[provider.id];
@@ -65,6 +65,9 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
       .map((limit) => ({ value: `${provider.id}:${limit.id}`, label: `${providerNames[provider.id]} · ${limit.label}` })));
   const tracked = visibleTrackedLimit(draft.tracked_limit, state.settings.providers);
   const missingTracked = tracked !== "auto" && !options.some((option) => option.value === tracked);
+  const trackedProvider = state.providers.find((provider) => tracked.startsWith(`${provider.id}:`));
+  const trackedFallback = missingTracked && trackedProvider
+    ? trackedQuota(trackedProvider.id, trackedProvider.snapshot?.limits ?? [], tracked, now) : undefined;
   const thresholdInvalid = invalidField === "threshold";
   const intervalInvalid = invalidField === "interval";
 
@@ -89,11 +92,14 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
         </div>
       </fieldset>
       <label className="setting-row">
-        <span>Menu bar tracks<small>Choose a usage window</small></span>
+        <span>Menu bar tracks<small>{trackedFallback
+          ? `Claude's five-hour window is not reported. Using ${trackedFallback.label} until it returns.`
+          : "Choose a usage window"}</small></span>
         <select value={tracked} onChange={(event) => setDraft({ ...draft, tracked_limit: event.target.value })}>
           <option value="auto">Most-used quota</option>
           {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          {missingTracked && <option value={tracked}>{tracked} (unavailable)</option>}
+          {missingTracked && <option value={tracked}>{trackedFallback
+            ? `Claude · 5-hour (using ${trackedFallback.label})` : `${tracked} (unavailable)`}</option>}
         </select>
       </label>
       <div className="compact-settings">

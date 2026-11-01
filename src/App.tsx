@@ -188,7 +188,7 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
               now={now}
               threshold={settings.threshold}
               percentageMode={settings.percentage_mode}
-              tracked={settings.tracked_limit === `${provider.id}:${limit.id}`}
+              tracked={settings.tracked_limit === `${provider.id}:${limit.id}` || (tracksThisProvider && featured?.id === limit.id)}
               provider={provider} watches={watches} watchBlocked={!enabled || paused || recovery !== null || connectionPending}
             />
           ))}

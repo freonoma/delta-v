@@ -466,6 +466,30 @@ mod tests {
     }
 
     #[test]
+    fn weekly_only_responses_do_not_invent_a_session_window() {
+        for response in [
+            json!({
+                "five_hour": null,
+                "seven_day": {"utilization": 97, "resets_at": "2026-11-02T00:00:00Z"}
+            }),
+            json!({
+                "limits": [
+                    {"kind": "weekly_all", "percent": 97, "resets_at": "2026-11-02T00:00:00Z"}
+                ]
+            }),
+        ] {
+            let result = parse(response, 0).unwrap();
+            assert_eq!(result.limits.len(), 1);
+            assert_eq!(result.limits[0].id, "weekly");
+            assert_eq!(result.limits[0].label, "Weekly");
+            assert_eq!(result.limits[0].used_fraction, Some(0.97));
+            assert_eq!(result.limits[0].window_seconds, Some(604800));
+            assert!(result.limits[0].resets_at.is_some());
+            assert!(result.warnings.is_empty());
+        }
+    }
+
+    #[test]
     fn scoped_limits_keep_identity_even_when_values_match_and_activity_is_false() {
         let result = parse(json!({
             "limits": [
