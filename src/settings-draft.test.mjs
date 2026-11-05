@@ -8,6 +8,7 @@ function settings(changes = {}) {
   return {
     providers: "both", claude_enabled: true, codex_enabled: true,
     launch_at_login_prompt_dismissed: false, history_recording: false, history_retention: "forever", notifications_enabled: false,
+    pace_notifications_enabled: false, pace_notifications_scope: "weekly", show_pacing: true,
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
     theme: "system", ui_style: "glass", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
     ...changes,
@@ -20,7 +21,7 @@ test("drafts and save payloads contain only form-owned preferences and independe
   assert.deepEqual(draft, {
     preferences: {
       tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
-      theme: "system", ui_style: "glass", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
+      theme: "system", ui_style: "glass", percentage_mode: "remaining", show_pacing: true, claude_windows: ["session"], codex_windows: [],
     },
     threshold: "20", interval: "60", layout: "columns",
   });
@@ -38,7 +39,7 @@ test("dirty checks compare each owned field and preserve window order", () => {
   assert.equal(isSettingsDraftDirty(createSettingsDraft(settings(), "columns"), baseline), false);
   for (const change of [
     { tracked_limit: "auto" }, { theme: "dark" }, { ui_style: "legacy" }, { percentage_mode: "used" },
-    { claude_windows: [] }, { codex_windows: ["weekly"] },
+    { claude_windows: [] }, { codex_windows: ["weekly"] }, { show_pacing: false },
   ]) {
     const draft = { ...baseline, preferences: { ...baseline.preferences, ...change } };
     assert.equal(isSettingsDraftDirty(draft, baseline), true);
@@ -101,6 +102,8 @@ test("provider normalization adopts untouched tracking without resetting an unsa
   assert.equal("providers" in reconciled.preferences, false);
   assert.equal("history_recording" in reconciled.preferences, false);
   assert.equal("notifications_enabled" in reconciled.preferences, false);
+  assert.equal("pace_notifications_enabled" in reconciled.preferences, false);
+  assert.equal("pace_notifications_scope" in reconciled.preferences, false);
 });
 
 test("reconciliation adopts each clean field independently and preserves edited fields", () => {
@@ -178,4 +181,27 @@ test("an unsaved UI style survives unrelated updates and is included in the vali
   const result = validateSettingsDraft(reconciled, "both");
   assert.equal(result.error, null);
   assert.equal(result.preferences.ui_style, "legacy");
+});
+
+test("pacing display edits survive immediate notification updates and save independently", () => {
+  const baseline = createSettingsDraft(settings(), "columns");
+  const draft = { ...baseline, preferences: { ...baseline.preferences, show_pacing: false } };
+  const next = createSettingsDraft(settings({
+    pace_notifications_enabled: true, pace_notifications_scope: "all", theme: "dark",
+  }), "columns");
+  const reconciled = reconcileSettingsDraft(draft, baseline, next);
+  assert.equal(reconciled.preferences.show_pacing, false);
+  assert.equal(reconciled.preferences.theme, "dark");
+  assert.equal(isSettingsDraftDirty(reconciled, next), true);
+  assert.equal(validateSettingsDraft(reconciled, "both").preferences.show_pacing, false);
+  assert.equal(createSettingsDraft(settings(), "columns").preferences.show_pacing, true);
+});
+
+test("an untouched pacing display follows external saves", () => {
+  const baseline = createSettingsDraft(settings(), "columns");
+  const draft = { ...baseline, preferences: { ...baseline.preferences, theme: "dark" } };
+  const next = createSettingsDraft(settings({ show_pacing: false }), "columns");
+  const reconciled = reconcileSettingsDraft(draft, baseline, next);
+  assert.equal(reconciled.preferences.show_pacing, false);
+  assert.equal(reconciled.preferences.theme, "dark");
 });

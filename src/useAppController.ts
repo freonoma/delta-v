@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppState, DisplayPreferences, HistoryState, PanelPreferences, PanelPreferencesState, ProviderId, ProviderSelection, ReconnectAction, RecoveryPhase } from "./types";
+import type { AppState, DisplayPreferences, HistoryState, NotificationStatus, PanelPreferences, PanelPreferencesState, ProviderId, ProviderSelection, ReconnectAction, RecoveryPhase } from "./types";
 import { createPreview } from "./preview";
 import { latestSnapshot, previewDisplayPreferences, previewPanelPreferences, previewProviderSelection } from "./preference-state";
 import { providerEnabled, signInBlocked } from "./provider-display";
@@ -61,10 +61,11 @@ export function useAppController() {
     });
   }, []);
 
-  const updateNotificationPreference = useCallback((enabled: boolean) => {
+  const updateNotificationPreference = useCallback((notifications: NotificationStatus) => {
     if (!preview) return;
     setState((current) => current ? {
-      ...current, settings: { ...current.settings, notifications_enabled: enabled },
+      ...current, settings: { ...current.settings, notifications_enabled: notifications.enabled,
+        pace_notifications_enabled: notifications.pace_enabled, pace_notifications_scope: notifications.pace_scope },
     } : current);
   }, []);
 

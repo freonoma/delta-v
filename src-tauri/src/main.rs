@@ -8,6 +8,7 @@ mod history_query;
 mod model;
 mod notification_delivery;
 mod notifications;
+mod pace_notifications;
 mod panel_state;
 mod platform;
 mod providers;
@@ -358,6 +359,17 @@ async fn set_notifications_enabled(
 }
 
 #[tauri::command]
+async fn set_pace_notifications(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    scope: settings::PaceNotificationScope,
+) -> Result<notification_delivery::NotificationStatus, String> {
+    require_notification_settings(&window)?;
+    notification_delivery::set_pace_enabled(&app, enabled, scope).await
+}
+
+#[tauri::command]
 async fn send_test_notification(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -501,6 +513,7 @@ fn main() -> tauri::Result<()> {
             open_login_item_settings,
             get_notification_state,
             set_notifications_enabled,
+            set_pace_notifications,
             send_test_notification,
             open_notification_settings,
             get_availability_watch_state,

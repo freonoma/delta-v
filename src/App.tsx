@@ -5,6 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, ReconnectAction, RecoveryPhase, Settings } from "./types";
 import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
+import { allowancePace } from "./pacing";
+import { PaceGuide, PaceMarker } from "./PaceGuide";
 import { HistoryView } from "./HistoryView";
 import { UpcomingResets } from "./UpcomingResets";
 import { QuotaWatchControl, WatchFeedback } from "./AvailabilityControls";
@@ -48,9 +50,10 @@ function ResetTime({ timestamp, now }: { timestamp: number | null; now: number }
   );
 }
 
-function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, watches, watchBlocked }: {
+function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, watches, watchBlocked, showPacing, historyEnabled }: {
   limit: Limit; now: number; threshold: number; tracked: boolean; percentageMode: PercentageMode;
   provider: ProviderState; watches: ReturnType<typeof useAvailabilityWatches>; watchBlocked: boolean;
+  showPacing: boolean; historyEnabled: boolean;
 }) {
   const used = usedPercent(limit);
   const remaining = remainingPercent(limit);
@@ -59,6 +62,7 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, wa
   const percentage = limit.kind === "quota" && remaining !== null ? quotaPercent(remaining, mode) : used;
   const hasBar = limit.enabled && percentage !== null && limit.kind !== "credits";
   const amount = limit.amount ? amountDescription(limit.amount) : null;
+  const pace = allowancePace(limit, provider, now, watchBlocked);
   const percentageLabel = percentage === null ? null : percentage > 0 && percentage < 1 ? "<1"
     : percentage > 99 && percentage < 100 ? ">99"
     : limit.kind === "quota" ? wholePercent(percentage, mode) : Math.round(percentage);
@@ -71,6 +75,7 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, wa
       {hasBar && (
         <div className={`usage-bar${low ? " low" : ""}`} role="progressbar" aria-label={`${limit.label}, ${mode}`} aria-valuenow={Math.min(100, Math.max(0, percentage))} aria-valuemin={0} aria-valuemax={100}>
           <div className="usage-fill" style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }} />
+          {showPacing && <PaceMarker pace={pace} mode={mode} />}
         </div>
       )}
       {amount && <p className="amount-description">{amount}</p>}
@@ -80,6 +85,7 @@ function LimitRow({ limit, now, threshold, tracked, percentageMode, provider, wa
         <ResetTime timestamp={limit.resets_at} now={now} />
         <span className={`provenance ${limit.provenance}`}>{provenanceNames[limit.provenance]}</span>
       </div>
+      {showPacing && <PaceGuide pace={pace} limit={limit} provider={provider} historyEnabled={historyEnabled} />}
       <QuotaWatchControl watches={watches} provider={provider} limit={limit} now={now} blocked={watchBlocked} />
     </li>
   );
@@ -190,6 +196,7 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
               percentageMode={settings.percentage_mode}
               tracked={settings.tracked_limit === `${provider.id}:${limit.id}` || (tracksThisProvider && featured?.id === limit.id)}
               provider={provider} watches={watches} watchBlocked={!enabled || paused || recovery !== null || connectionPending}
+              showPacing={settings.show_pacing} historyEnabled={settings.history_recording}
             />
           ))}
         </ul>
@@ -253,6 +260,7 @@ export default function App() {
         setHistoryOpen(false);
         setShowDragHint(false);
         setKeyboardNavigation(false);
+        shell.current?.querySelector<HTMLDialogElement>(".pace-popup[open]")?.close("dismissed");
         watches.abandonPreparation();
         window.cancelAnimationFrame(focusFrame.current);
         focusFrame.current = window.requestAnimationFrame(() => shell.current?.focus({ preventScroll: true }));
@@ -484,7 +492,7 @@ export default function App() {
           </div>}
           {panelReady && miniActive && state ? (
             <MiniView providers={displayedProviders} settings={state.settings} now={now} expanded={miniExpanded}
-              pending={panelBusy} pendingRecovery={pendingRecovery}
+              pending={panelBusy} pendingRecovery={pendingRecovery} pendingConnection={pendingConnection} paused={state.paused}
               onExpand={() => void changePanelPreferences({ expanded: true })} onDetails={() => void openFullView(true)} />
           ) : panelReady && historyOpen ? null : panelReady && state ? (
             <>

@@ -48,6 +48,14 @@ pub enum PercentageMode {
     Used,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PaceNotificationScope {
+    #[default]
+    Weekly,
+    All,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -65,6 +73,9 @@ pub struct Settings {
     pub claude_windows: Vec<String>,
     pub codex_windows: Vec<String>,
     pub notifications_enabled: bool,
+    pub show_pacing: bool,
+    pub pace_notifications_enabled: bool,
+    pub pace_notifications_scope: PaceNotificationScope,
     pub history_recording: bool,
     pub history_retention: Retention,
 }
@@ -73,6 +84,7 @@ pub struct Settings {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayPreferences {
+    pub show_pacing: bool,
     pub tracked_limit: String,
     pub threshold: u8,
     pub refresh_seconds: u64,
@@ -86,6 +98,7 @@ pub struct DisplayPreferences {
 impl DisplayPreferences {
     pub fn apply_to(self, current: &Settings) -> Result<Settings, SettingsError> {
         let mut settings = Settings {
+            show_pacing: self.show_pacing,
             tracked_limit: self.tracked_limit,
             threshold: self.threshold,
             refresh_seconds: self.refresh_seconds,
@@ -107,6 +120,7 @@ impl DisplayPreferences {
 impl From<&Settings> for DisplayPreferences {
     fn from(settings: &Settings) -> Self {
         Self {
+            show_pacing: settings.show_pacing,
             tracked_limit: settings.tracked_limit.clone(),
             threshold: settings.threshold,
             refresh_seconds: settings.refresh_seconds,
@@ -135,6 +149,9 @@ impl Default for Settings {
             claude_windows: Vec::new(),
             codex_windows: Vec::new(),
             notifications_enabled: false,
+            show_pacing: true,
+            pace_notifications_enabled: false,
+            pace_notifications_scope: PaceNotificationScope::Weekly,
             history_recording: false,
             history_retention: Retention::Forever,
         }
@@ -278,6 +295,8 @@ mod tests {
             "codex_enabled",
             "launch_at_login_prompt_dismissed",
             "notifications_enabled",
+            "pace_notifications_enabled",
+            "pace_notifications_scope",
             "history_recording",
             "history_retention",
         ] {
@@ -285,7 +304,7 @@ mod tests {
             expanded[field] = serde_json::json!(true);
             assert!(serde_json::from_value::<DisplayPreferences>(expanded).is_err());
         }
-        for field in ["theme", "ui_style"] {
+        for field in ["theme", "ui_style", "show_pacing"] {
             let mut incomplete = payload.clone();
             incomplete.as_object_mut().unwrap().remove(field);
             assert!(serde_json::from_value::<DisplayPreferences>(incomplete).is_err());
@@ -376,6 +395,12 @@ mod tests {
         assert!(settings.launch_at_login_prompt_dismissed);
         assert!(!settings.history_recording);
         assert!(!settings.notifications_enabled);
+        assert!(settings.show_pacing);
+        assert!(!settings.pace_notifications_enabled);
+        assert_eq!(
+            settings.pace_notifications_scope,
+            PaceNotificationScope::Weekly
+        );
         assert_eq!(settings.history_retention, Retention::Forever);
     }
 
@@ -448,6 +473,29 @@ mod tests {
                 .unwrap()
                 .notifications_enabled
         );
+    }
+
+    #[test]
+    fn pace_preferences_round_trip_and_display_drafts_preserve_alert_choices() {
+        let mut draft = DisplayPreferences::from(&Settings::default());
+        draft.show_pacing = false;
+        for scope in [PaceNotificationScope::Weekly, PaceNotificationScope::All] {
+            let current = Settings {
+                pace_notifications_enabled: true,
+                pace_notifications_scope: scope,
+                ..Settings::default()
+            };
+            let updated = draft.clone().apply_to(&current).unwrap();
+            assert!(!updated.show_pacing);
+            assert!(updated.pace_notifications_enabled);
+            assert_eq!(updated.pace_notifications_scope, scope);
+            assert!(!updated.notifications_enabled);
+            assert_eq!(
+                toml::from_str::<Settings>(&toml::to_string(&updated).unwrap()).unwrap(),
+                updated
+            );
+        }
+        assert!(toml::from_str::<Settings>("pace_notifications_scope = 'daily'").is_err());
     }
 
     #[test]

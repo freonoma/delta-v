@@ -181,14 +181,14 @@ fn provider_index(provider: ProviderId) -> usize {
     }
 }
 
-fn valid_account_key(key: &str) -> bool {
+pub(crate) fn valid_account_key(key: &str) -> bool {
     key.len() == 64
         && key
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn ambiguous_ids(limits: &[Limit]) -> BTreeSet<&str> {
+pub(crate) fn ambiguous_ids(limits: &[Limit]) -> BTreeSet<&str> {
     let mut seen = BTreeSet::new();
     let mut ambiguous = BTreeSet::new();
     for limit in limits {
@@ -203,7 +203,7 @@ fn ambiguous_ids(limits: &[Limit]) -> BTreeSet<&str> {
     ambiguous
 }
 
-fn eligible_reading(limit: &Limit, now: i64) -> Option<(f64, i64)> {
+pub(crate) fn eligible_reading(limit: &Limit, now: i64) -> Option<(f64, i64)> {
     let used = limit.used_fraction?;
     let reset = limit.resets_at?;
     if !limit.enabled

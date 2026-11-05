@@ -1,6 +1,6 @@
-import type { NotificationPermission, NotificationStatus } from "./types";
+import type { NotificationPermission, NotificationStatus, PaceNotificationScope } from "./types";
 
-export type NotificationAction = "enable" | "disable" | "test" | "open";
+export type NotificationAction = "enable" | "disable" | "pace_enable" | "pace_disable" | "pace_scope" | "test" | "open";
 export type NotificationAvailability = "ready" | "not_determined" | "denied" | "alerts_disabled" | "unavailable" | "unknown";
 
 export const notificationReadError = "Could not read notification status. Check again.";
@@ -19,8 +19,9 @@ export function notificationAvailability(state: NotificationStatus): Notificatio
 export function notificationActionAllowed(state: NotificationStatus, action: NotificationAction): boolean {
   const availability = notificationAvailability(state);
   if (action === "disable") return state.enabled;
+  if (action === "pace_disable" || action === "pace_scope") return state.pace_enabled;
   if (action === "open") return true;
-  if (action === "test") return state.enabled && availability === "ready";
+  if (action === "test") return (state.enabled || state.pace_enabled) && availability === "ready";
   return availability === "ready" || availability === "not_determined";
 }
 
@@ -30,10 +31,12 @@ export function notificationStatusText(state: NotificationStatus): string {
     case "unavailable": return state.permission?.reason ?? "Notifications are unavailable in this copy of Delta-V.";
     case "denied": return "Notifications are blocked in macOS. Allow Delta-V in System Settings > Notifications.";
     case "alerts_disabled": return "Alerts are off in macOS. Allow alerts for Delta-V in System Settings > Notifications.";
-    case "not_determined": return state.enabled
+    case "not_determined": return state.enabled || state.pace_enabled
       ? "Permission is needed to resume alerts. Choose Allow notifications to ask macOS."
-      : "Turn on to request permission from macOS.";
-    case "ready": return state.enabled ? "Low-allowance notifications are on." : "Low-allowance notifications are off.";
+      : "Turn on an alert to request permission from macOS.";
+    case "ready": return state.enabled && state.pace_enabled ? "Low allowance and pace notifications are on."
+      : state.enabled ? "Low-allowance notifications are on."
+      : state.pace_enabled ? "Pace notifications are on." : "Low allowance and pace notifications are off.";
   }
 }
 
@@ -41,8 +44,11 @@ export function notificationFailure(action: NotificationAction, caught: unknown)
   if (typeof caught === "string" && caught.trim() && caught.length <= 500) return caught;
   if (caught instanceof Error && caught.message.trim() && caught.message.length <= 500) return caught.message;
   switch (action) {
-    case "enable": return "Could not enable notifications. Check permission and try again.";
-    case "disable": return "Could not turn off notifications. Try again.";
+    case "enable":
+    case "pace_enable": return "Could not enable notifications. Check permission and try again.";
+    case "disable":
+    case "pace_disable": return "Could not turn off notifications. Try again.";
+    case "pace_scope": return "Could not save the pace alert scope. Try again.";
     case "test": return "Could not send the test notification. Try again.";
     case "open": return "Could not open notification settings. Open System Settings > Notifications > Delta-V.";
   }
@@ -52,40 +58,54 @@ function previewState(example: string | null, fallbackEnabled = false): Notifica
   const permission: NotificationPermission = {
     authorization: "authorized", alerts_enabled: true, available: true, reason: null,
   };
+  const pace = { pace_enabled: false, pace_scope: "weekly" as const };
   switch (example) {
-    case "enabled": return { enabled: true, permission, error: null };
-    case "off": return { enabled: false, permission, error: null };
-    case "denied": return { enabled: true, permission: { ...permission, authorization: "denied", alerts_enabled: false }, error: null };
-    case "alerts_disabled": return { enabled: true, permission: { ...permission, alerts_enabled: false }, error: null };
-    case "unavailable": return { enabled: fallbackEnabled, permission: {
+    case "enabled": return { ...pace, enabled: true, permission, error: null };
+    case "off": return { ...pace, enabled: false, permission, error: null };
+    case "denied": return { ...pace, enabled: true, permission: { ...permission, authorization: "denied", alerts_enabled: false }, error: null };
+    case "alerts_disabled": return { ...pace, enabled: true, permission: { ...permission, alerts_enabled: false }, error: null };
+    case "unavailable": return { ...pace, enabled: fallbackEnabled, permission: {
       ...permission, available: false, authorization: "unknown", alerts_enabled: false,
       reason: "Notifications are available when Delta-V runs from its app bundle. Open Delta-V.app and try again.",
     }, error: null };
-    case "read_error": return { enabled: fallbackEnabled, permission: null, error: notificationReadError };
-    case "delivery_error": return { enabled: true, permission, error: "Could not send the notification. Try again." };
-    default: return { enabled: false, permission: { ...permission, authorization: "not_determined", alerts_enabled: false }, error: null };
+    case "read_error": return { ...pace, enabled: fallbackEnabled, permission: null, error: notificationReadError };
+    case "delivery_error": return { ...pace, enabled: true, permission, error: "Could not send the notification. Try again." };
+    default: return { ...pace, enabled: false, permission: { ...permission, authorization: "not_determined", alerts_enabled: false }, error: null };
   }
+}
+
+function notificationChoices(state: NotificationStatus): Pick<NotificationStatus, "enabled" | "pace_enabled" | "pace_scope"> {
+  return { enabled: state.enabled, pace_enabled: state.pace_enabled, pace_scope: state.pace_scope };
 }
 
 export function createNotificationPreview(search: string): NotificationStatus {
   const parameters = new URLSearchParams(search);
   const example = parameters.get("notifications");
-  // Both kinds of alerts share macOS permission, but keep independent opt-ins.
-  if (example === null && parameters.has("watches")) {
+  const paceExample = parameters.get("pace_notifications");
+  const paceScope: PaceNotificationScope = parameters.get("pace_scope") === "all" ? "all" : "weekly";
+  // All alert types share macOS permission, while each keeps its own opt-in.
+  if (example === null && paceExample === null && parameters.has("watches")) {
     const watchExample = parameters.get("watches");
     const sharedPermission = ["denied", "unavailable", "read_error"].includes(watchExample ?? "")
       ? watchExample : "off";
     return { ...previewState(sharedPermission), enabled: false };
   }
-  return previewState(example, example === "read_error");
+  const state = previewState(example ?? paceExample, (example ?? paceExample) === "read_error");
+  return {
+    ...state,
+    enabled: example === null ? false : state.enabled,
+    pace_enabled: paceExample !== null && ["enabled", "denied", "alerts_disabled", "read_error", "delivery_error"].includes(paceExample),
+    pace_scope: paceScope,
+  };
 }
 
 export function readNotificationPreview(current: NotificationStatus, search: string): NotificationStatus {
   const result = new URLSearchParams(search).get("notifications_read_result");
-  return result ? { ...previewState(result, current.enabled), enabled: current.enabled } : current;
+  return result ? { ...previewState(result, current.enabled), ...notificationChoices(current) } : current;
 }
 
-export function completeNotificationPreview(current: NotificationStatus, action: NotificationAction, search: string): {
+export function completeNotificationPreview(current: NotificationStatus, action: NotificationAction, search: string,
+  scope: PaceNotificationScope = current.pace_scope): {
   state: NotificationStatus; error: string | null; notice: string | null;
 } {
   const parameters = new URLSearchParams(search);
@@ -98,16 +118,21 @@ export function completeNotificationPreview(current: NotificationStatus, action:
   if (action === "open") return { state: current, error: null, notice: "Browser preview: opening System Settings is simulated." };
   if (action === "test") {
     if (result && !["enabled", "off"].includes(result)) {
-      const next = { ...previewState(result, current.enabled), enabled: current.enabled };
+      const next = { ...previewState(result, current.enabled), ...notificationChoices(current) };
       return { state: next, error: notificationAvailability(next) === "ready" ? null : notificationStatusText(next), notice: null };
     }
     return { state: { ...current, error: null }, error: null,
       notice: "Browser preview: test request simulated. No macOS notification was sent." };
   }
-  let next = result ? previewState(result, current.enabled) : { ...current, error: null };
+  let next = result ? { ...previewState(result, current.enabled), ...notificationChoices(current) } : { ...current, error: null };
   if (action === "disable") next = { ...next, enabled: false };
-  else if (!result || result === "enabled" || result === "off") next = previewState("enabled");
-  else next = { ...next, enabled: current.enabled };
-  const allowed = action === "disable" || notificationAvailability(next) === "ready";
+  else if (action === "pace_disable") next = { ...next, pace_enabled: false, pace_scope: scope };
+  else if (action === "pace_scope") next = { ...next, pace_scope: scope };
+  else if (!result || result === "enabled" || result === "off") {
+    next = { ...previewState("enabled"), ...notificationChoices(current),
+      ...(action === "pace_enable" ? { pace_enabled: true, pace_scope: scope } : { enabled: true }) };
+  }
+  const allowed = action === "disable" || action === "pace_disable" || action === "pace_scope"
+    || notificationAvailability(next) === "ready";
   return { state: next, error: allowed ? null : notificationStatusText(next), notice: null };
 }

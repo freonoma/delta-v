@@ -65,6 +65,7 @@ impl Fixture {
                 },
             ],
             notifications: Evaluator::default(),
+            pace_notifications: PaceEvaluator::default(),
             notification_generation: 0,
             notification_permission: None,
             availability: self.registry(),

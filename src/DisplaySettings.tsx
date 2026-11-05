@@ -132,6 +132,12 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
           <option value="used">Used</option>
         </select>
       </label>
+      <div className="setting-row">
+        <span id="show-pacing-label">Show pacing<small id="show-pacing-description">Compare usage with an even spread between resets, including nights and weekends. Save changes to apply.</small></span>
+        <button type="button" role="switch" className="startup-switch" aria-labelledby="show-pacing-label"
+          aria-describedby="show-pacing-description" aria-checked={draft.show_pacing} disabled={busy}
+          onClick={() => setDraft({ ...draft, show_pacing: !draft.show_pacing })}><span /></button>
+      </div>
       <label className="setting-row">
         <span>Low allowance threshold<small>Remaining percentage used for highlighting and enabled alerts. Save changes to apply.</small></span>
         <span className="number-field" data-invalid={thresholdInvalid || undefined}>

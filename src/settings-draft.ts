@@ -47,6 +47,7 @@ export function isSettingsDraftDirty(draft: SettingsDraft, baseline: SettingsDra
     || current.theme !== saved.theme
     || current.ui_style !== saved.ui_style
     || current.percentage_mode !== saved.percentage_mode
+    || current.show_pacing !== saved.show_pacing
     || !sameWindows(current.claude_windows, saved.claude_windows)
     || !sameWindows(current.codex_windows, saved.codex_windows)
     || draft.layout !== baseline.layout
@@ -85,6 +86,7 @@ export function reconcileSettingsDraft(draft: SettingsDraft, baseline: SettingsD
       theme: current.theme === saved.theme ? next.theme : current.theme,
       ui_style: current.ui_style === saved.ui_style ? next.ui_style : current.ui_style,
       percentage_mode: current.percentage_mode === saved.percentage_mode ? next.percentage_mode : current.percentage_mode,
+      show_pacing: current.show_pacing === saved.show_pacing ? next.show_pacing : current.show_pacing,
       claude_windows: [...(sameWindows(current.claude_windows, saved.claude_windows) ? next.claude_windows : current.claude_windows)],
       codex_windows: [...(sameWindows(current.codex_windows, saved.codex_windows) ? next.codex_windows : current.codex_windows)],
       // The editable text is authoritative until validation creates the save payload.

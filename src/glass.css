@@ -140,7 +140,7 @@
 [data-ui-style="glass"] :is(.text-button, .primary-button, .setting-row select, .window-picker select, .number-field) { border-radius: 8px; }
 [data-ui-style="glass"] .primary-button { color: var(--on-accent); }
 /* Floating surfaces need a stronger tint to stay readable above panel content. */
-[data-ui-style="glass"] :is(.disconnect-dialog, .drag-hint, .history-export-options, .history-export-error) {
+[data-ui-style="glass"] :is(.disconnect-dialog, .drag-hint, .history-export-options, .history-export-error, .pace-popup) {
   background: var(--floating-surface);
   border-color: var(--glass-edge);
   border-radius: 12px;
@@ -148,6 +148,7 @@
   -webkit-backdrop-filter: blur(24px) saturate(120%);
   backdrop-filter: blur(24px) saturate(120%);
 }
+[data-ui-style="glass"] .pace-popup::backdrop { background: rgb(0 0 0 / .09); }
 [data-ui-style="glass"] .history-export-options { padding: 5px; width: 200px; }
 [data-ui-style="glass"] .history-export-options button { border-radius: 7px; min-height: 30px; font-size: 11px; }
 [data-ui-style="glass"] .history-export-options p { font-size: 10px; }
@@ -266,8 +267,18 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  [data-ui-style="glass"] :is(.disconnect-dialog, .drag-hint, .history-export-options, .history-export-error) {
+  [data-ui-style="glass"] :is(.disconnect-dialog, .drag-hint, .history-export-options, .history-export-error, .pace-popup) {
     background: var(--opaque-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  [data-ui-style="glass"] .pace-popup {
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }

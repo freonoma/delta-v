@@ -8,6 +8,7 @@ import {
 const settings = {
   providers: "both", claude_enabled: true, codex_enabled: true,
   launch_at_login_prompt_dismissed: false, history_recording: false, notifications_enabled: false,
+  pace_notifications_enabled: false, pace_notifications_scope: "weekly", show_pacing: true,
   history_retention: "forever", tracked_limit: "codex:weekly", threshold: 20,
   refresh_seconds: 60, theme: "system", ui_style: "glass", percentage_mode: "remaining",
   claude_windows: [], codex_windows: [],
@@ -18,23 +19,24 @@ test("an old display draft cannot carry immediate preferences into its save payl
   const payload = displayPreferences(draft);
   assert.deepEqual(payload, {
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
-    theme: "dark", ui_style: "legacy", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
+    theme: "dark", ui_style: "legacy", percentage_mode: "remaining", show_pacing: true, claude_windows: ["session"], codex_windows: [],
   });
   draft.claude_windows.push("weekly");
   assert.deepEqual(payload.claude_windows, ["session"]);
 });
 
 test("display and provider changes preserve immediate preferences in either save order", () => {
-  const draft = displayPreferences({ ...settings, theme: "dark", ui_style: "legacy", threshold: 15 });
+  const draft = displayPreferences({ ...settings, theme: "dark", ui_style: "legacy", threshold: 15, show_pacing: false });
   const current = {
     ...settings, claude_enabled: false, codex_enabled: false,
     launch_at_login_prompt_dismissed: true, history_recording: true, history_retention: "days30", notifications_enabled: true,
+    pace_notifications_enabled: true, pace_notifications_scope: "all",
   };
   const displayFirst = previewProviderSelection(previewDisplayPreferences(current, draft), "claude");
   const providerFirst = previewDisplayPreferences(previewProviderSelection(current, "claude"), draft);
   assert.deepEqual(displayFirst, providerFirst);
   assert.deepEqual(providerFirst, {
-    ...current, providers: "claude", tracked_limit: "auto", theme: "dark", ui_style: "legacy", threshold: 15,
+    ...current, providers: "claude", tracked_limit: "auto", theme: "dark", ui_style: "legacy", threshold: 15, show_pacing: false,
   });
 });
 

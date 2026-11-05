@@ -1,14 +1,18 @@
 import type { Limit, PercentageMode, ProviderId, ProviderState, RecoveryPhase, Settings } from "./types";
 import { eligibleQuota, hiddenLowQuota, miniLimits, quotaPercent, remainingPercent, sampleAge, shortDuration, wholePercent } from "./usage";
 import { rateLimitMessage } from "./provider-display";
+import { allowancePace } from "./pacing";
+import { PaceGuide, PaceMarker } from "./PaceGuide";
 
 const names: Record<ProviderId, string> = { claude: "Claude", codex: "Codex" };
 const sources: Record<Limit["provenance"], string> = {
   official: "Official", local_estimate: "Local estimate", unknown: "Unknown source",
 };
 
-function MiniReading({ limit, heading, primary, mode, threshold, now }: {
+function MiniReading({ limit, heading, primary, mode, threshold, now, provider, paceBlocked, showPacing, historyEnabled }: {
   limit: Limit | undefined; heading: string; primary: boolean; mode: PercentageMode; threshold: number; now: number;
+  provider: ProviderState; paceBlocked: boolean;
+  showPacing: boolean; historyEnabled: boolean;
 }) {
   const valid = limit !== undefined && eligibleQuota(limit, now);
   const remaining = valid ? remainingPercent(limit) : null;
@@ -17,6 +21,7 @@ function MiniReading({ limit, heading, primary, mode, threshold, now }: {
   const expired = limit?.resets_at !== null && limit?.resets_at !== undefined && limit.resets_at <= now;
   const reset = limit?.resets_at ?? null;
   const resetText = reset === null ? "No reset time" : expired ? "Awaiting reset" : `Resets ${shortDuration(reset - now)}`;
+  const pace = limit ? allowancePace(limit, provider, now, paceBlocked) : null;
 
   return (
     <div className={`mini-reading${low ? " low" : ""}`}>
@@ -29,6 +34,7 @@ function MiniReading({ limit, heading, primary, mode, threshold, now }: {
           <div className={`usage-bar${low ? " low" : ""}`} role="progressbar"
             aria-label={`${limit.label}, ${mode}`} aria-valuenow={percentage} aria-valuemin={0} aria-valuemax={100}>
             <div className="usage-fill" style={{ width: `${percentage}%` }} />
+            {showPacing && pace && <PaceMarker pace={pace} mode={mode} />}
           </div>
           <div className="mini-meta">
             {primary && <span>{limit.label}</span>}
@@ -36,13 +42,15 @@ function MiniReading({ limit, heading, primary, mode, threshold, now }: {
           </div>
         </>
       ) : <p className="mini-unavailable">{!limit ? "Chosen window unavailable" : expired ? "Awaiting reset update" : "Usage unavailable"}</p>}
+      {showPacing && pace && limit && <PaceGuide pace={pace} limit={limit} provider={provider} historyEnabled={historyEnabled} compact />}
     </div>
   );
 }
 
-export function MiniView({ providers, settings, now, expanded, pending, pendingRecovery, onExpand, onDetails }: {
+export function MiniView({ providers, settings, now, expanded, pending, pendingRecovery, pendingConnection, paused, onExpand, onDetails }: {
   providers: ProviderState[]; settings: Settings; now: number; expanded: boolean; pending: boolean;
   pendingRecovery: Partial<Record<ProviderId, RecoveryPhase>>;
+  pendingConnection: Partial<Record<ProviderId, boolean>>; paused: boolean;
   onExpand: () => void; onDetails: () => void;
 }) {
   return (
@@ -73,7 +81,9 @@ export function MiniView({ providers, settings, now, expanded, pending, pendingR
             {slots.length > 0 ? shown.map((limit, index) => (
               <MiniReading key={index === 0 ? "first" : "second"} limit={limit} primary={index === 0}
                 heading={index === 0 ? names[provider.id] : limit?.label ?? "Second window"}
-                mode={settings.percentage_mode} threshold={settings.threshold} now={now} />
+                mode={settings.percentage_mode} threshold={settings.threshold} now={now} provider={provider}
+                showPacing={settings.show_pacing} historyEnabled={settings.history_recording}
+                paceBlocked={!enabled || paused || recovery !== null || Boolean(pendingConnection[provider.id])} />
             )) : <div className="mini-heading"><h2>{names[provider.id]}</h2></div>}
             {snapshot && slots.length === 0 && <p className="mini-unavailable">No quota windows</p>}
             {hiddenLow && hiddenRemaining !== null && (

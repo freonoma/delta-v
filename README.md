@@ -96,7 +96,7 @@ Use **Save changes** to apply display preferences, or **Discard changes** to res
 
 Delta-V remembers the pin, view and position when you quit. A pinned panel returns when the app launches, without taking keyboard focus. If its monitor is disconnected, it moves onto an available screen. Unpin it before quitting if you want Delta-V to start quietly in the menu bar.
 
-Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage and reset countdown. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Display & usage → Mini layout**. Delta-V remembers the layout and whether the second window is expanded.
+Once pinned, choose **Switch to mini view** beside the pin. Mini view shows one window per provider, with a percentage, reset countdown and pace guide when available. **+** reveals the second window; **−** hides it. The outward arrows return to the full panel. You can choose **Side by side** or **Stacked** under **Settings → Display & usage → Mini layout**. Delta-V remembers the layout and whether the second window is expanded.
 
 Mini view uses the same first and second windows as **Settings → Display & usage → Compact view**. If another limit is running low, a warning stays visible even when that limit is hidden. Click it to see the limit. Stale readings remain labelled, and **Open details** takes you to connection controls when needed.
 
@@ -119,6 +119,25 @@ Usage updates automatically. **Check now** requests the latest reading; it canno
 Routine Claude checks stay at least five minutes apart, including **Check now**, waking your Mac, and changing the provider selection. Automatic checks also follow a longer saved refresh interval and idle slowdown. **Check now** can request an earlier check, subject to the five-minute minimum and any service cooldown. Codex keeps its existing refresh timing. Explicit sign-in recovery can check sooner after a new sign-in; it still respects service cooldowns.
 
 Claude's service waits are saved locally and restored before checking usage after a restart. This includes the fallback wait when a service error supplies no useful retry time. Disconnecting Claude or changing its sign-in does not bypass an outstanding wait. An expired wait allows checking again; it does not restore a usage reading. Codex waits remain in memory.
+
+### Allowance pacing
+
+Each displayed quota can show a short **Pace** row in the full panel and mini view. A mark on its usage bar shows a steady spread of allowance through the quota window, including nights and weekends. The mark follows your **Remaining** or **Used** display preference; the status compares allowance consumed with the share of time that has passed. Pacing starts on. To hide it, turn off **Settings → Display & usage → Show pacing**, then choose **Save changes**.
+
+| Status | Meaning |
+| --- | --- |
+| **Just started** | The first 10% of the window, capped at six hours, gives usage time to settle. |
+| **Watch usage** | After that settling period, usage is more than ten percentage points above steady use. |
+| **On track** | After the settling period, usage is no more than ten percentage points above steady use. |
+| **Used up** | This quota reports no remaining allowance. |
+
+Choose **Pace** to open a small popup for that provider and quota. It shows how much allowance remains, the time left and an amount per day or hour that would spread the remaining allowance until reset. These amounts are percentages of the whole quota. With less than an hour left, it shows the remaining percentage. The popup sits over the panel and scrolls when space is limited. Close it with the close button, Escape or a click outside it.
+
+The **Allowance remaining** chart compares your readings with a dashed **Steady use** line from the start of the window to its reset. With history recording on, the chart uses saved readings for the current account and quota window. Gaps stay visible, and a latest reading that has not reached the history file appears as a separate dot. With history off, the chart shows the latest reading alone. Turn on **Settings → History → Record usage history** to build a curve; opening Pace leaves history recording off until you choose to enable it.
+
+The guide and budget use the time of the last reading and stay fixed until a new reading arrives. They become unavailable when the reading is stale, checks are paused, an account action is in progress, the reset has passed, or the window's duration or timing is missing or invalid. An open popup closes when its reading becomes unavailable.
+
+Open **How to read pace** inside the popup for an explanation of the chart. The provider's percentage already includes past allowance use. How much work fits in the remaining budget depends on the model, reasoning effort and task size. Delta-V uses the reported percentage and does not detect your active model. Each quota, including a model-specific window, has its own guide and applies alongside the other limits. Pacing runs locally on existing readings and optional saved history.
 
 ### Upcoming resets
 
@@ -151,6 +170,14 @@ The first valid reading stays quiet, even if already low. This applies after ena
 
 Alerts have no sound and include the provider, usage-window names and remaining threshold. macOS controls where notification previews appear. Clicking an alert opens usage without discarding unsaved Settings changes. Ordinary development executables cannot send notifications; use a built `Delta-V.app` to check this feature.
 
+### Usage above pace notifications
+
+Turn on **Settings → Notifications → Usage above pace** to receive a quiet alert when allowance use stays above the guide across fresh checks. This starts off and asks for macOS permission if needed. **Watch allowances** defaults to **Weekly and longer**; choose **All allowances** to include shorter windows. The scope appears while the alert is enabled.
+
+After the settling period, the first valid reading stays quiet. Two later readings must confirm usage more than ten percentage points above steady use, at least five minutes apart. A quota that stays fully used up can also qualify. Failed or stale checks break this sequence. Each quota and account can alert once per reset window while Delta-V stays open. Restarting, changing accounts, reconnecting or restoring permission requires a fresh quiet baseline.
+
+Alerts name the provider and quota, remaining allowance and reset time. If a low-allowance alert qualifies for the same quota on the same reading, Delta-V sends that alert alone. Both connected providers are monitored, including one hidden from the panel. Notification changes apply immediately and work independently of **Show pacing**, low-allowance alerts and history recording. **Send test notification** is available when either allowance-alert option is on and macOS permits alerts.
+
 ### Notify when available
 
 **Notify when available** appears beside an eligible, fully exhausted quota in the full usage panel. It is hidden while that quota still has allowance. The provider must report it as fully used in a fresh reading with a future reset time; a displayed percentage rounded to 0% remaining is not enough. Use **Show more** for quota windows hidden by your compact-view choices. Credits, stale readings and windows with missing or elapsed reset times cannot start an alert.
@@ -159,7 +186,7 @@ Choose the button to save a one-time alert for that quota and account. macOS ask
 
 Delta-V waits for a newer, fresh reading from the same account confirming remaining allowance for the same quota window. A reported reset time passing, a service wait ending, or another quota recovering cannot trigger it. The alert identifies the recovered quota and can mention other windows still reported as exhausted; it does not guarantee that every quota allows work.
 
-These alerts work independently of low-allowance notifications and history recording. Pending alerts survive app restarts and keep their original account. Disconnecting or sign-in recovery pauses monitoring for that provider; switching accounts leaves an alert waiting for its original account. It can complete after that account is connected and verified again. Hidden providers with pending alerts still follow the usual polling schedule, including idle slowdown, screen-lock pauses and service waits. Delta-V must be running to check.
+These alerts work independently of low-allowance notifications, pace notifications and history recording. Pending alerts survive app restarts and keep their original account. Disconnecting or sign-in recovery pauses monitoring for that provider; switching accounts leaves an alert waiting for its original account. It can complete after that account is connected and verified again. Hidden providers with pending alerts still follow the usual polling schedule, including idle slowdown, screen-lock pauses and service waits. Delta-V must be running to check.
 
 Open **Settings → Notifications → Notify when available** to review or cancel saved alerts, including those for hidden or disconnected providers and earlier accounts. **Cancel alert** is also available beside a matching quota in the panel. These actions apply immediately without **Save changes**. **Check alert status** rereads saved alerts and macOS permission; it does not request a usage check.
 
@@ -232,7 +259,7 @@ Routine usage checks contact these endpoints:
 - [Anthropic usage](https://api.anthropic.com/api/oauth/usage)
 - [OpenAI usage](https://chatgpt.com/backend-api/wham/usage)
 
-Delta-V uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate when history recording or low-allowance notifications are enabled. It also uses this endpoint while verifying an account for an availability alert or monitoring a pending Claude alert. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs. Notifications do not enable history recording.
+Delta-V uses [Anthropic's account profile endpoint](https://api.anthropic.com/api/oauth/profile) to keep Claude accounts separate when history recording, low-allowance notifications or pace notifications are enabled. It also uses this endpoint while verifying an account for an availability alert or monitoring a pending Claude alert. A successful lookup is cached in memory for the current sign-in token. A new token or app restart needs another lookup; failed lookups retry with backoff. Codex's usage response already includes the account identifiers it needs. Notifications do not enable history recording.
 
 Each provider receives its own saved access token with the request. OpenAI also receives the selected account ID. Credentials stay in the Rust backend and are never passed to the usage panel. Delta-V does not read browser cookies or write credentials.
 
@@ -241,6 +268,8 @@ Choosing **Check for updates** makes an unauthenticated request to [GitHub's lat
 When you choose **Reconnect** or **Sign in**, Delta-V starts the official client in a temporary folder. That client handles renewal, browser login, and saving its own credentials. It can contact the provider's authentication, configuration, and other startup services as well as the usage endpoints above. Delta-V disables optional telemetry and integrations for these helpers and does not send a model prompt. Recovery only runs when you ask for it.
 
 Delta-V's usage reader does not read conversations, project files, or session logs. With history off, usage snapshots stay in memory and are lost when you quit. Optional history saves timestamps, quota labels and IDs, fractions used, reset times, window lengths, provenance, and an opaque account key. It does not save names, email addresses, tokens, or raw API responses. Settings and any recorded history stay on your Mac.
+
+Pacing uses the current quota reading and, when history recording is on, reads the existing local history files for its chart. The pacing display choice, pace-alert opt-in and selected scope are saved with Settings. Pace-alert baselines and records of alerts already sent stay in memory, separated by opaque account key and quota, and clear when Delta-V quits.
 
 Pending availability alerts save their provider, quota ID and label, window length, opaque account key, creation time and last-observation time, plus local record identifiers. This small record is separate from history and contains no usage percentages, reset times, credentials, names, email addresses or raw responses. Cancelling or completing an alert removes its pending record. Turning off or clearing history does not cancel availability alerts.
 
@@ -312,11 +341,14 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `claude_windows` | `[]` | Up to two Claude limit IDs for the compact rows, in display order; empty means Automatic |
 | `codex_windows` | `[]` | Up to two Codex limit IDs for the compact rows, in display order; empty means Automatic |
 | `percentage_mode` | `"remaining"` | `"remaining"` or `"used"`, for the menu bar, provider summaries, and usage bars |
+| `show_pacing` | `true` | Show pace rows and reference marks in the full panel and mini view |
 | `threshold` | `20` | Low allowance threshold, from 0 to 100% remaining; the saved value controls highlighting and enabled notifications watch for crossings below it |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; routine Claude checks have a 300-second minimum. Idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
 | `ui_style` | `"glass"` | `"glass"` for translucent surfaces, or `"legacy"` for the original look |
 | `notifications_enabled` | `false` | Local low-allowance alerts for both connected providers; macOS alert permission is also required |
+| `pace_notifications_enabled` | `false` | Local alerts for sustained usage above pace; macOS alert permission is also required |
+| `pace_notifications_scope` | `"weekly"` | `"weekly"` for windows of at least seven days, or `"all"` for every eligible quota window |
 | `history_recording` | `false` | Save new quota readings locally for both connected providers |
 | `history_retention` | `"forever"` | `"forever"`, `"days30"`, or `"days90"`; shorter retention also removes older saved readings |
 
@@ -329,13 +361,14 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 - [ ] Add a Homebrew cask for installation and updates.
 - [x] Offer Launch at login during setup and in Settings.
 - [x] Keep quota history on your Mac, with charts and PNG/CSV exports.
+- [x] Show pace guidance, remaining budgets and an optional recorded-usage chart in the panel and mini view.
 - [x] Organize settings in a dedicated window.
 - [x] Offer optional low-allowance notifications.
-- [ ] Add optional Claude and Codex mascots, with separate toggles that start off.
+- [x] Offer optional alerts when usage stays above pace.
 
-Proposed UI direction, not yet implemented: take inspiration from [Clawd Usage WinWidget](https://github.com/Enhed/clawd-usage-winwidget) and [Claudy Usage Mac](https://github.com/juliobianco/claudy-usage-mac). Mascots would accompany the existing usage figures and reset times, with initial states based only on quota readings and their freshness. Keep a static option and respect reduced-motion preferences.
+Later UI candidate, not yet implemented: optional Claude and Codex mascots inspired by [Clawd Usage WinWidget](https://github.com/Enhed/clawd-usage-winwidget) and [Claudy Usage Mac](https://github.com/juliobianco/claudy-usage-mac), with separate toggles that start off. Mascots would accompany the existing usage figures and reset times, with initial states based only on quota readings and their freshness. Keep a static option and respect reduced-motion preferences.
 
-Follow-on candidates include mini-view polish and a small trend chart using existing optional local history. Live session activity would need its own validated data source before the UI could show whether an agent is working or waiting.
+Follow-on candidates include mini-view polish. Live session activity would need its own validated data source before the UI could show whether an agent is working or waiting.
 
 Under consideration: API usage and spending in a separate view. API billing would need its own data sources and account setup, and would stay separate from subscription allowances.
 

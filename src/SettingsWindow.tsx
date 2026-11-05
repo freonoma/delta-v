@@ -29,7 +29,7 @@ const sectionDescriptions: Record<SettingsSection, string> = {
   display: "Choose usage windows, percentages and appearance.",
   accounts: "Manage the accounts Delta-V checks for usage.",
   history: "Manage the readings saved on this Mac.",
-  notifications: "Manage low-allowance and one-time availability alerts.",
+  notifications: "Manage low-allowance, pace and one-time availability alerts.",
   app: "Launch at login and check for updates.",
 };
 type CloseIntent = "close" | "back" | "quit";
@@ -77,7 +77,7 @@ function SettingsEditor({ controller, state, panelPreferences, section, setSecti
   const { now, login, updates, saving, panelBusy, pendingRecovery, pendingConnection,
     saveDisplayPreferences, savePanelPreferences, updateHistoryPreferences, setProviderEnabled,
     reconnect, cancelReconnect } = controller;
-  const notifications = useNotifications(state.settings.notifications_enabled, controller.updateNotificationPreference);
+  const notifications = useNotifications(state.settings, controller.updateNotificationPreference);
   const watches = useAvailabilityWatches(state);
   const [form, setForm] = useState(() => {
     const baseline = createSettingsDraft(state.settings, panelPreferences.layout);

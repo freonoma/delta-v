@@ -21,11 +21,13 @@ use crate::{
         Evaluator, LowAllowance,
         availability::{ArmReadiness, RecoveredAllowance, Watch, fresh_account_key},
     },
+    pace_notifications::{Evaluator as PaceEvaluator, PaceAlert},
     platform::{self, Activity},
     providers::{self, ClaudeProvider, CodexProvider, Issue, IssueKind, Provider, ProviderError},
     recording::{HistoryState, Recorder},
     settings::{
-        self, DisplayPreferences, PercentageMode, ProviderSelection, Settings, SettingsError,
+        self, DisplayPreferences, PaceNotificationScope, PercentageMode, ProviderSelection,
+        Settings, SettingsError,
     },
     tray,
 };
@@ -110,6 +112,7 @@ struct Inner {
     view: AppState,
     schedules: [Schedule; 2],
     notifications: Evaluator,
+    pace_notifications: PaceEvaluator,
     notification_generation: u64,
     notification_permission: Option<bool>,
     availability: AvailabilityWatches,
@@ -122,6 +125,12 @@ pub struct NotificationTicket {
     pub snapshot: ProviderSnapshot,
     connection_generation: u64,
     policy_generation: u64,
+}
+
+#[derive(Default)]
+pub struct NotificationBatch {
+    pub low: Vec<LowAllowance>,
+    pub pace: Vec<PaceAlert>,
 }
 
 /// A watch response remains independent of the low-allowance notification preference.
@@ -216,6 +225,7 @@ impl Runtime {
             },
             schedules: Default::default(),
             notifications: Evaluator::default(),
+            pace_notifications: PaceEvaluator::default(),
             notification_generation: 0,
             notification_permission: None,
             availability: AvailabilityWatches::load(AvailabilityStore::new(
@@ -270,6 +280,19 @@ impl Runtime {
         Ok(view)
     }
 
+    pub fn set_pace_notifications(
+        &self,
+        enabled: bool,
+        scope: PaceNotificationScope,
+    ) -> Result<AppState, String> {
+        let mut inner = self.inner.lock().map_err(|_| "Could not save settings.")?;
+        let view =
+            save_pace_notifications(&mut inner, enabled, scope, providers::now(), settings::save)?;
+        drop(inner);
+        self.wake.notify_one();
+        Ok(view)
+    }
+
     /// Record permission reads outside polling so restoring access starts with a fresh baseline.
     pub fn update_notification_permission(&self, can_deliver: bool) -> Result<(), String> {
         let mut inner = self
@@ -283,15 +306,15 @@ impl Runtime {
         &self,
         ticket: &NotificationTicket,
         can_deliver: bool,
-    ) -> Result<Vec<LowAllowance>, String> {
+    ) -> Result<NotificationBatch, String> {
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| "Could not evaluate usage notifications.".to_owned())?;
         if self.quitting.load(Ordering::Relaxed) {
-            return Ok(Vec::new());
+            return Ok(NotificationBatch::default());
         }
-        notification_candidates(&mut inner, ticket, can_deliver, providers::now())
+        notification_batch(&mut inner, ticket, can_deliver, providers::now())
     }
 
     pub fn notification_ticket_current(&self, ticket: &NotificationTicket) -> bool {
@@ -425,7 +448,12 @@ fn save_settings_change(
     if settings.notifications_enabled != inner.view.settings.notifications_enabled
         || settings.threshold != inner.view.settings.threshold
     {
-        reset_notification_baselines(inner);
+        reset_low_notification_baselines(inner);
+    }
+    if settings.pace_notifications_enabled != inner.view.settings.pace_notifications_enabled
+        || settings.pace_notifications_scope != inner.view.settings.pace_notifications_scope
+    {
+        reset_pace_notification_baselines(inner);
     }
     for (index, provider) in PROVIDERS.into_iter().enumerate() {
         if inner.view.settings.providers.includes(provider) != settings.providers.includes(provider)
@@ -448,6 +476,21 @@ fn reset_notification_baselines(inner: &mut Inner) {
     inner.notification_generation = inner.notification_generation.wrapping_add(1);
     for provider in PROVIDERS {
         inner.notifications.reset_baseline(provider);
+        inner.pace_notifications.reset_baseline(provider);
+    }
+}
+
+fn reset_low_notification_baselines(inner: &mut Inner) {
+    inner.notification_generation = inner.notification_generation.wrapping_add(1);
+    for provider in PROVIDERS {
+        inner.notifications.reset_baseline(provider);
+    }
+}
+
+fn reset_pace_notification_baselines(inner: &mut Inner) {
+    inner.notification_generation = inner.notification_generation.wrapping_add(1);
+    for provider in PROVIDERS {
+        inner.pace_notifications.reset_baseline(provider);
     }
 }
 
@@ -470,7 +513,7 @@ fn save_notifications_enabled(
     )?;
     // An explicit restore may follow a permission change that polling never observed.
     if enabled && already_enabled {
-        reset_notification_baselines(inner);
+        reset_low_notification_baselines(inner);
     }
     Ok(view)
 }
@@ -483,6 +526,10 @@ fn update_notification_permission(inner: &mut Inner, can_deliver: bool) -> Resul
         reset_notification_baselines(inner);
     }
     inner.notification_permission = Some(can_deliver);
+    inner.pace_notifications.set_policy(
+        inner.view.settings.pace_notifications_enabled && can_deliver,
+        inner.view.settings.pace_notifications_scope,
+    );
     inner
         .notifications
         .set_policy(
@@ -497,7 +544,8 @@ fn notification_ticket(
     accepted: Option<&ProviderSnapshot>,
 ) -> Option<NotificationTicket> {
     let snapshot = accepted?;
-    if !inner.view.settings.notifications_enabled {
+    if !inner.view.settings.notifications_enabled && !inner.view.settings.pace_notifications_enabled
+    {
         return None;
     }
     Some(NotificationTicket {
@@ -515,7 +563,7 @@ fn notification_max_age(inner: &Inner, provider: ProviderId) -> u64 {
 }
 
 fn notification_ticket_current(inner: &Inner, ticket: &NotificationTicket, now: i64) -> bool {
-    inner.view.settings.notifications_enabled
+    (inner.view.settings.notifications_enabled || inner.view.settings.pace_notifications_enabled)
         && inner.notification_generation == ticket.policy_generation
         && accepted_snapshot_current(inner, &ticket.snapshot, ticket.connection_generation, now)
 }
@@ -766,6 +814,57 @@ fn notification_candidates(
     ))
 }
 
+fn notification_batch(
+    inner: &mut Inner,
+    ticket: &NotificationTicket,
+    can_deliver: bool,
+    now: i64,
+) -> Result<NotificationBatch, String> {
+    let current = notification_ticket_current(inner, ticket, now);
+    let low = notification_candidates(inner, ticket, can_deliver, now)?;
+    if !current {
+        return Ok(NotificationBatch::default());
+    }
+    let max_age = notification_max_age(inner, ticket.snapshot.provider);
+    let mut pace = inner.pace_notifications.observe(
+        &ticket.snapshot,
+        ticket.snapshot.history_account.as_deref(),
+        now,
+        max_age,
+    );
+    // Both evaluators consume the period once; an overlapping low alert carries
+    // the urgent message and suppresses a duplicate pace banner for that quota.
+    pace.retain(|candidate| !low.iter().any(|low| low.limit_id == candidate.limit_id));
+    Ok(NotificationBatch { low, pace })
+}
+
+fn save_pace_notifications(
+    inner: &mut Inner,
+    enabled: bool,
+    scope: PaceNotificationScope,
+    now: i64,
+    persist: impl FnOnce(&Settings) -> Result<(), SettingsError>,
+) -> Result<AppState, String> {
+    let same_enabled_policy = enabled
+        && inner.view.settings.pace_notifications_enabled
+        && inner.view.settings.pace_notifications_scope == scope;
+    let view = save_settings_change(
+        inner,
+        |current| {
+            let mut settings = current.clone();
+            settings.pace_notifications_enabled = enabled;
+            settings.pace_notifications_scope = scope;
+            Ok(settings)
+        },
+        now,
+        persist,
+    )?;
+    if same_enabled_policy {
+        reset_pace_notification_baselines(inner);
+    }
+    Ok(view)
+}
+
 pub fn history_state(app: &AppHandle) -> Result<HistoryState, String> {
     app.state::<Runtime>().history.state()
 }
@@ -781,13 +880,14 @@ struct CurrentHistoryAccount {
     provider: ProviderId,
     account_key: Option<String>,
     verified_at: Option<i64>,
+    reading_id: Option<String>,
 }
 
 fn current_history_accounts(view: &AppState) -> Vec<CurrentHistoryAccount> {
     PROVIDERS
         .into_iter()
         .map(|provider| {
-            let snapshot = view
+            let state = view
                 .providers
                 .iter()
                 .find(|state| {
@@ -796,13 +896,19 @@ fn current_history_accounts(view: &AppState) -> Vec<CurrentHistoryAccount> {
                         && state.error.is_none()
                         && state.recovery.is_none()
                         && !state.stale
+                        && state.reading_id.is_some()
                 })
-                .and_then(|state| state.snapshot.as_ref())
-                .filter(|snapshot| snapshot.history_account.is_some());
+                .filter(|state| {
+                    state.snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.provider == provider && snapshot.history_account.is_some()
+                    })
+                });
+            let snapshot = state.and_then(|state| state.snapshot.as_ref());
             CurrentHistoryAccount {
                 provider,
                 account_key: snapshot.and_then(|snapshot| snapshot.history_account.clone()),
                 verified_at: snapshot.map(|snapshot| snapshot.fetched_at),
+                reading_id: state.and_then(|state| state.reading_id.clone()),
             }
         })
         .collect()
@@ -1023,6 +1129,7 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
     let state = &mut inner.view.providers[index];
     let schedule = &mut inner.schedules[index];
     inner.notifications.reset_baseline(state.id);
+    inner.pace_notifications.reset_baseline(state.id);
     inner.view.settings.set_enabled(state.id, enabled);
     if !enabled {
         inner.identity_demand[index] = false;
@@ -1205,6 +1312,7 @@ fn begin_recovery(
         return Err("Wait a few seconds before trying to reconnect again.".to_owned());
     }
     inner.notifications.reset_baseline(state.id);
+    inner.pace_notifications.reset_baseline(state.id);
     schedule.generation = schedule.generation.wrapping_add(1);
     schedule.last_recovery_started = Some(now);
     schedule.recovery_cancel = Some(cancel);
@@ -1608,7 +1716,8 @@ fn should_poll(settings: &Settings, provider: ProviderId) -> bool {
     settings.is_enabled(provider)
         && (settings.providers.includes(provider)
             || settings.history_recording
-            || settings.notifications_enabled)
+            || settings.notifications_enabled
+            || settings.pace_notifications_enabled)
 }
 
 fn should_poll_for(inner: &Inner, settings: &Settings, provider: ProviderId) -> bool {
@@ -1620,6 +1729,7 @@ fn should_poll_for(inner: &Inner, settings: &Settings, provider: ProviderId) -> 
 
 fn needs_notification_identity(inner: &Inner, provider: ProviderId) -> bool {
     inner.view.settings.notifications_enabled
+        || inner.view.settings.pace_notifications_enabled
         || inner.availability.has_provider(provider)
         || inner.identity_demand[provider_index(provider)]
 }
@@ -1628,6 +1738,11 @@ fn queue_polls(inner: &mut Inner, activity: Activity, now: i64) -> Vec<(usize, P
     let mut pending = Vec::new();
     let was_paused = inner.view.paused;
     inner.view.paused = activity.locked != Some(false);
+    if was_paused != inner.view.paused {
+        for provider in PROVIDERS {
+            inner.pace_notifications.reset_baseline(provider);
+        }
+    }
     for (index, provider) in PROVIDERS.into_iter().enumerate() {
         let cadence = interval(&inner.view.settings, provider, activity.idle_seconds);
         if (inner.view.paused || !inner.view.settings.is_enabled(provider))
@@ -1897,6 +2012,7 @@ fn apply_result(
             state.stale = is_stale(state, now, cadence);
         }
         Err(error) => {
+            inner.pace_notifications.reset_baseline(state.id);
             schedule.failures = schedule.failures.saturating_add(1);
             schedule.waiting_for_sign_in = error.requires_sign_in();
             schedule.cooldown_issue = (!schedule.waiting_for_sign_in).then(|| error.issue());
@@ -2141,6 +2257,201 @@ mod tests {
         let mut state = inner();
         state.view.settings.notifications_enabled = true;
         state
+    }
+
+    fn pace_state() -> Inner {
+        let mut state = inner();
+        state.view.settings.pace_notifications_enabled = true;
+        state
+    }
+
+    fn accept_pace_reading(state: &mut Inner, at: i64, used: f64) -> NotificationTicket {
+        let mut reading = notification_reading(at, used);
+        reading.limits[0].id = "weekly".into();
+        reading.limits[0].label = "Weekly".into();
+        reading.limits[0].resets_at = Some(1_400_000);
+        reading.limits[0].window_seconds = Some(604_800);
+        let generation = state.schedules[0].generation;
+        state.schedules[0].poll_generation = Some(generation);
+        let accepted = finish_poll(state, 0, generation, at, Ok(reading));
+        notification_ticket(state, accepted.as_ref()).unwrap()
+    }
+
+    #[test]
+    fn pace_only_monitoring_includes_hidden_providers_and_verified_identity() {
+        let mut state = inner();
+        state.view.settings.providers = ProviderSelection::Codex;
+        state.schedules[0].next_due = 1_000_300;
+        state.schedules[0].blocked_until = 1_000_900;
+        assert!(!should_poll(&state.view.settings, ProviderId::Claude));
+        assert!(!needs_notification_identity(&state, ProviderId::Claude));
+        save_pace_notifications(
+            &mut state,
+            true,
+            PaceNotificationScope::Weekly,
+            1_000_000,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(should_poll(&state.view.settings, ProviderId::Claude));
+        assert!(needs_notification_identity(&state, ProviderId::Claude));
+        assert_eq!(state.schedules[0].next_due, 0);
+        assert_eq!(state.schedules[0].blocked_until, 1_000_900);
+        assert!(!state.view.settings.notifications_enabled);
+        assert!(!state.view.settings.history_recording);
+        change_connection(&mut state, 0, false, 1_000_000);
+        assert!(!should_poll(&state.view.settings, ProviderId::Claude));
+    }
+
+    #[test]
+    fn pace_batch_baselines_confirms_and_consumes_without_low_alerts() {
+        let mut state = pace_state();
+        for offset in [0, 300, 600, 900] {
+            let ticket = accept_pace_reading(&mut state, 1_000_000 + offset, 0.6);
+            let batch = notification_batch(&mut state, &ticket, true, 1_000_000 + offset).unwrap();
+            assert!(batch.low.is_empty());
+            assert_eq!(batch.pace.len(), usize::from(offset == 600));
+        }
+    }
+
+    #[test]
+    fn a_low_alert_consumes_an_overlapping_pace_alert_on_the_same_reading() {
+        let mut state = pace_state();
+        state.view.settings.notifications_enabled = true;
+        for (offset, used) in [(0, 0.6), (300, 0.6), (600, 0.9), (900, 0.9)] {
+            let ticket = accept_pace_reading(&mut state, 1_000_000 + offset, used);
+            let batch = notification_batch(&mut state, &ticket, true, 1_000_000 + offset).unwrap();
+            assert_eq!(batch.low.len(), usize::from(offset == 600));
+            assert!(batch.pace.is_empty());
+        }
+    }
+
+    #[test]
+    fn pace_permission_restoration_and_failed_checks_require_fresh_baselines() {
+        for action in ["permission", "error", "connection", "policy"] {
+            let mut state = pace_state();
+            for offset in [0, 300] {
+                let ticket = accept_pace_reading(&mut state, 1_000_000 + offset, 0.6);
+                notification_batch(&mut state, &ticket, true, 1_000_000 + offset).unwrap();
+            }
+            match action {
+                "permission" => {
+                    update_notification_permission(&mut state, false).unwrap();
+                    update_notification_permission(&mut state, true).unwrap();
+                }
+                "error" => {
+                    state.schedules[0].poll_generation = Some(state.schedules[0].generation);
+                    let generation = state.schedules[0].generation;
+                    assert!(
+                        finish_poll(
+                            &mut state,
+                            0,
+                            generation,
+                            1_000_450,
+                            Err(ProviderError::Network)
+                        )
+                        .is_none()
+                    );
+                }
+                "connection" => {
+                    change_connection(&mut state, 0, false, 1_000_450);
+                    change_connection(&mut state, 0, true, 1_000_451);
+                }
+                "policy" => {
+                    save_pace_notifications(
+                        &mut state,
+                        true,
+                        PaceNotificationScope::All,
+                        1_000_450,
+                        |_| Ok(()),
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            for offset in [600, 900, 1200] {
+                let ticket = accept_pace_reading(&mut state, 1_000_000 + offset, 0.6);
+                let batch =
+                    notification_batch(&mut state, &ticket, true, 1_000_000 + offset).unwrap();
+                assert_eq!(batch.pace.len(), usize::from(offset == 1200), "{action}");
+            }
+        }
+    }
+
+    #[test]
+    fn pace_policy_saves_reject_queued_readings_and_failed_saves_preserve_them() {
+        let mut state = pace_state();
+        let ticket = accept_pace_reading(&mut state, 1_000_000, 0.6);
+        assert!(
+            save_pace_notifications(
+                &mut state,
+                false,
+                PaceNotificationScope::All,
+                1_000_000,
+                |_| Err(SettingsError::InvalidFile)
+            )
+            .is_err()
+        );
+        assert!(notification_ticket_current(&state, &ticket, 1_000_000));
+        save_pace_notifications(
+            &mut state,
+            true,
+            PaceNotificationScope::All,
+            1_000_000,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(!notification_ticket_current(&state, &ticket, 1_000_000));
+        assert!(
+            notification_batch(&mut state, &ticket, true, 1_000_000)
+                .unwrap()
+                .pace
+                .is_empty()
+        );
+        let ticket = accept_pace_reading(&mut state, 1_000_300, 0.6);
+        notification_batch(&mut state, &ticket, true, 1_000_300).unwrap();
+        save_pace_notifications(
+            &mut state,
+            true,
+            PaceNotificationScope::All,
+            1_000_300,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(!notification_ticket_current(&state, &ticket, 1_000_300));
+    }
+
+    #[test]
+    fn low_preference_changes_do_not_clear_pace_confirmations() {
+        let mut state = pace_state();
+        for offset in [0, 300] {
+            let ticket = accept_pace_reading(&mut state, 1_000_000 + offset, 0.6);
+            notification_batch(&mut state, &ticket, true, 1_000_000 + offset).unwrap();
+        }
+        save_notifications_enabled(&mut state, true, 1_000_450, |_| Ok(())).unwrap();
+        let ticket = accept_pace_reading(&mut state, 1_000_600, 0.6);
+        let batch = notification_batch(&mut state, &ticket, true, 1_000_600).unwrap();
+        assert_eq!(batch.pace.len(), 1);
+        assert!(batch.low.is_empty());
+    }
+
+    #[test]
+    fn pace_preference_changes_preserve_low_crossing_baselines() {
+        let mut state = notification_state();
+        let first = accept_pace_reading(&mut state, 1_000_000, 0.6);
+        notification_batch(&mut state, &first, true, 1_000_000).unwrap();
+        save_pace_notifications(
+            &mut state,
+            true,
+            PaceNotificationScope::Weekly,
+            1_000_100,
+            |_| Ok(()),
+        )
+        .unwrap();
+        let ticket = accept_pace_reading(&mut state, 1_000_300, 0.9);
+        let batch = notification_batch(&mut state, &ticket, true, 1_000_300).unwrap();
+        assert_eq!(batch.low.len(), 1);
+        assert!(batch.pace.is_empty());
     }
 
     fn notification_reading(at: i64, used: f64) -> ProviderSnapshot {
@@ -2485,6 +2796,7 @@ mod tests {
         for display_first in [true, false] {
             let mut state = inner();
             let draft = DisplayPreferences {
+                show_pacing: true,
                 tracked_limit: "codex:weekly".into(),
                 threshold: 15,
                 refresh_seconds: 120,
@@ -2711,6 +3023,7 @@ mod tests {
             },
             schedules: Default::default(),
             notifications: Evaluator::default(),
+            pace_notifications: PaceEvaluator::default(),
             notification_generation: 0,
             notification_permission: None,
             availability: AvailabilityWatches::load(AvailabilityStore::new(None)),
@@ -2742,25 +3055,37 @@ mod tests {
             Some("a".repeat(64).as_str())
         );
         assert_eq!(accounts[0].verified_at, Some(100));
+        assert_eq!(accounts[0].reading_id.as_deref(), Some("initial"));
         assert_eq!(accounts[1].provider, ProviderId::Codex);
         assert!(accounts[1].account_key.is_none());
+        assert!(accounts[1].reading_id.is_none());
 
-        for reason in 0..4 {
+        for reason in 0..7 {
             let mut unavailable = view.clone();
             match reason {
                 0 => unavailable.settings.claude_enabled = false,
                 1 => unavailable.providers[0].stale = true,
                 2 => unavailable.providers[0].recovery = Some(RecoveryStage::SigningIn),
-                _ => {
+                3 => {
                     unavailable.providers[0].error = Some(Issue {
                         kind: IssueKind::Authentication,
                         message: "Sign in again.".into(),
                     })
                 }
+                4 => unavailable.providers[0].reading_id = None,
+                5 => {
+                    unavailable.providers[0]
+                        .snapshot
+                        .as_mut()
+                        .unwrap()
+                        .history_account = None
+                }
+                _ => unavailable.providers[0].snapshot = None,
             }
             let account = current_history_accounts(&unavailable).remove(0);
             assert!(account.account_key.is_none());
             assert!(account.verified_at.is_none());
+            assert!(account.reading_id.is_none());
         }
     }
 

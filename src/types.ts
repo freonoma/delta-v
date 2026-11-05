@@ -5,6 +5,7 @@ export type UiStyle = "glass" | "legacy";
 export type PercentageMode = "remaining" | "used";
 export type MiniLayout = "columns" | "stacked";
 export type HistoryRetention = "forever" | "days30" | "days90";
+export type PaceNotificationScope = "weekly" | "all";
 
 export interface HistoryState {
   recording: boolean;
@@ -41,7 +42,7 @@ export interface HistoryAccount {
 
 export interface HistoryCatalog {
   accounts: HistoryAccount[];
-  current_accounts: { provider: ProviderId; account_key: string | null; verified_at: number | null }[];
+  current_accounts: { provider: ProviderId; account_key: string | null; verified_at: number | null; reading_id?: string | null }[];
 }
 
 export type HistoryRange = { kind: "today" | "days7" | "days30" | "all_time" } | { kind: "day"; date: string };
@@ -112,6 +113,8 @@ export interface Settings {
   codex_enabled: boolean;
   launch_at_login_prompt_dismissed: boolean;
   notifications_enabled: boolean;
+  pace_notifications_enabled: boolean;
+  pace_notifications_scope: PaceNotificationScope;
   history_recording: boolean;
   history_retention: HistoryRetention;
   tracked_limit: string;
@@ -120,6 +123,7 @@ export interface Settings {
   theme: Theme;
   ui_style: UiStyle;
   percentage_mode: PercentageMode;
+  show_pacing: boolean;
   claude_windows: string[];
   codex_windows: string[];
 }
@@ -138,13 +142,15 @@ export interface NotificationPermission {
 
 export interface NotificationStatus {
   enabled: boolean;
+  pace_enabled: boolean;
+  pace_scope: PaceNotificationScope;
   permission: NotificationPermission | null;
   error: string | null;
 }
 
 export type DisplayPreferences = Pick<Settings,
   "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "ui_style" | "percentage_mode"
-  | "claude_windows" | "codex_windows">;
+  | "claude_windows" | "codex_windows" | "show_pacing">;
 
 export interface Amount {
   used: string | null;

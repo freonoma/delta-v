@@ -10,6 +10,8 @@ test("a new preview starts off without claiming permission was granted", () => {
   for (const search of ["", "?notifications=unexpected"]) {
     const state = createNotificationPreview(search);
     assert.equal(state.enabled, false);
+    assert.equal(state.pace_enabled, false);
+    assert.equal(state.pace_scope, "weekly");
     assert.equal(notificationAvailability(state), "not_determined");
     assert.equal(notificationActionAllowed(state, "enable"), true);
     assert.equal(notificationActionAllowed(state, "test"), false);
@@ -151,11 +153,101 @@ test("follow-up preview reads preserve a test outcome when permission lookup the
 });
 
 test("untyped command failures have an action-specific recovery message", () => {
-  for (const action of ["enable", "disable", "test", "open"]) {
+  for (const action of ["enable", "disable", "pace_enable", "pace_disable", "pace_scope", "test", "open"]) {
     const message = notificationFailure(action, { internal: "unexpected transport detail" });
     assert.ok(message.length > 0);
     assert.doesNotMatch(message, /unexpected transport detail/);
   }
   assert.match(notificationFailure("open", null), /System Settings/);
   assert.equal(notificationFailure("test", "Wait before sending another test."), "Wait before sending another test.");
+});
+
+test("pace alerts start independently with weekly scope and share notification permission", () => {
+  const fresh = createNotificationPreview("");
+  assert.equal(notificationActionAllowed(fresh, "pace_enable"), true);
+  assert.equal(notificationActionAllowed(fresh, "pace_disable"), false);
+  assert.equal(notificationActionAllowed(fresh, "pace_scope"), false);
+  const enabled = completeNotificationPreview(fresh, "pace_enable", "").state;
+  assert.equal(enabled.enabled, false);
+  assert.equal(enabled.pace_enabled, true);
+  assert.equal(enabled.pace_scope, "weekly");
+  assert.equal(notificationAvailability(enabled), "ready");
+  assert.equal(notificationActionAllowed(enabled, "test"), true);
+  assert.equal(fresh.pace_enabled, false);
+});
+
+test("changing one alert opt-in preserves the other and its saved scope", () => {
+  const pace = createNotificationPreview("?pace_notifications=enabled&pace_scope=all");
+  assert.equal(pace.enabled, false);
+  assert.equal(pace.pace_enabled, true);
+  const both = completeNotificationPreview(pace, "enable", "").state;
+  assert.equal(both.enabled, true);
+  assert.equal(both.pace_enabled, true);
+  assert.equal(both.pace_scope, "all");
+  const lowOnly = completeNotificationPreview(both, "pace_disable", "").state;
+  assert.equal(lowOnly.enabled, true);
+  assert.equal(lowOnly.pace_enabled, false);
+  assert.equal(lowOnly.pace_scope, "all");
+  const paceOnly = completeNotificationPreview(both, "disable", "").state;
+  assert.equal(paceOnly.enabled, false);
+  assert.equal(paceOnly.pace_enabled, true);
+  assert.equal(paceOnly.pace_scope, "all");
+  const off = completeNotificationPreview(paceOnly, "pace_disable", "").state;
+  assert.equal(notificationActionAllowed(off, "test"), false);
+});
+
+test("pace opt-in failures preserve preferences while permission remains shared", () => {
+  const before = createNotificationPreview("?notifications=enabled&pace_scope=all");
+  for (const result of ["error", "save_error"]) {
+    const failed = completeNotificationPreview(before, "pace_enable", `?notifications_pace_enable_result=${result}`, "weekly");
+    assert.deepEqual(failed.state, before);
+    assert.ok(failed.error);
+  }
+  const denied = completeNotificationPreview(before, "pace_enable", "?notifications_pace_enable_result=denied", "weekly");
+  assert.equal(denied.state.enabled, true);
+  assert.equal(denied.state.pace_enabled, false);
+  assert.equal(denied.state.pace_scope, "all");
+  assert.equal(notificationAvailability(denied.state), "denied");
+  assert.equal(notificationActionAllowed(denied.state, "test"), false);
+  assert.ok(denied.error);
+});
+
+test("pace can be turned off or scoped while permission is unavailable", () => {
+  for (const example of ["denied", "alerts_disabled", "unavailable", "read_error"]) {
+    const before = { ...createNotificationPreview(`?pace_notifications=${example}`), pace_enabled: true };
+    assert.equal(notificationActionAllowed(before, "pace_enable"), false);
+    assert.equal(notificationActionAllowed(before, "test"), false);
+    assert.equal(notificationActionAllowed(before, "pace_disable"), true);
+    assert.equal(notificationActionAllowed(before, "pace_scope"), true);
+    const scoped = completeNotificationPreview(before, "pace_scope", "", "all");
+    assert.equal(scoped.error, null);
+    assert.equal(scoped.state.pace_enabled, true);
+    assert.equal(scoped.state.pace_scope, "all");
+    const disabled = completeNotificationPreview(scoped.state, "pace_disable", "?notifications_pace_disable_result=read_error");
+    assert.equal(disabled.state.pace_enabled, false);
+    assert.equal(disabled.state.pace_scope, "all");
+    assert.equal(disabled.state.permission, null);
+    assert.equal(disabled.error, null);
+  }
+});
+
+test("a failed scope save leaves the saved scope intact", () => {
+  const before = createNotificationPreview("?pace_notifications=enabled");
+  const failed = completeNotificationPreview(before, "pace_scope", "?notifications_pace_scope_result=save_error", "all");
+  assert.deepEqual(failed.state, before);
+  assert.match(failed.error, /save/);
+});
+
+test("passive permission reads and explicit tests preserve both choices and scope", () => {
+  const before = createNotificationPreview("?notifications=enabled&pace_notifications=enabled&pace_scope=all");
+  for (const result of ["off", "enabled", "denied", "read_error"]) {
+    const next = readNotificationPreview(before, `?notifications_read_result=${result}`);
+    assert.equal(next.enabled, true);
+    assert.equal(next.pace_enabled, true);
+    assert.equal(next.pace_scope, "all");
+  }
+  const tested = completeNotificationPreview(before, "test", "?notifications_test_result=denied").state;
+  assert.equal(tested.enabled, true);
+  assert.equal(tested.pace_enabled, true);
+  assert.equal(tested.pace_scope, "all");
 });

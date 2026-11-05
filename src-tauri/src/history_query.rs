@@ -12,6 +12,7 @@ use crate::{
 const GAP_SECONDS: i64 = 30 * 60;
 const MAX_POINTS: usize = 100_000;
 const MAX_DAYS: usize = 36_600;
+const MAX_WINDOW_SECONDS: u64 = 90 * 86_400;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +30,7 @@ pub enum HistoryRange {
     Days30 {},
     AllTime {},
     Day { date: String },
+    Window { resets_at: i64, observed_at: i64 },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -174,6 +176,7 @@ impl Accumulator {
         }
         let today = calendar.day(now)?;
         let mut until = now.checked_add(1).ok_or(QueryError::InvalidRange)?;
+        let mut window_start = None;
         let selected_days = match &request.range {
             HistoryRange::Today {} => vec![today.clone()],
             HistoryRange::Days7 {} => calendar.days_ending_at(now, 7)?,
@@ -189,15 +192,41 @@ impl Accumulator {
                 until = until.min(day.ends_at);
                 vec![day]
             }
+            HistoryRange::Window {
+                resets_at,
+                observed_at,
+            } => {
+                let seconds = request
+                    .limit
+                    .window_seconds
+                    .filter(|seconds| (1..=MAX_WINDOW_SECONDS).contains(seconds))
+                    .and_then(|seconds| i64::try_from(seconds).ok())
+                    .ok_or(QueryError::InvalidRange)?;
+                let from = resets_at
+                    .checked_sub(seconds)
+                    .ok_or(QueryError::InvalidRange)?;
+                if *observed_at < from
+                    || observed_at >= resets_at
+                    || *observed_at > now
+                    || [from, *resets_at, *observed_at]
+                        .into_iter()
+                        .any(|at| time::OffsetDateTime::from_unix_timestamp(at).is_err())
+                {
+                    return Err(QueryError::InvalidRange);
+                }
+                until = observed_at.checked_add(1).ok_or(QueryError::InvalidRange)?;
+                window_start = Some(from);
+                calendar.days(from, until)?
+            }
         };
-        let from = selected_days.first().map(|day| day.starts_at);
+        let from = window_start.or_else(|| selected_days.first().map(|day| day.starts_at));
         let days = selected_days
             .into_iter()
             .map(|day| (day.starts_at, day.into()))
             .collect();
         let retain_points = matches!(
             request.range,
-            HistoryRange::Today {} | HistoryRange::Day { .. }
+            HistoryRange::Today {} | HistoryRange::Day { .. } | HistoryRange::Window { .. }
         );
         Ok(Self {
             request,
@@ -243,7 +272,7 @@ impl Accumulator {
                 && limit.window_seconds == self.request.limit.window_seconds
                 && limit.provenance == self.request.limit.provenance
         });
-        let reading = selected.next().map(|limit| Reading {
+        let mut reading = selected.next().map(|limit| Reading {
             used_fraction: limit.used_fraction,
             resets_at: limit.resets_at,
         });
@@ -253,6 +282,15 @@ impl Accumulator {
             })
         {
             return Err(QueryError::InvalidReading);
+        }
+        if let HistoryRange::Window { resets_at, .. } = &self.request.range {
+            // Keep the absent observation in the sequence so a different period
+            // cannot be silently removed and joined across when this one returns.
+            reading = reading.filter(|reading| {
+                reading
+                    .resets_at
+                    .is_some_and(|reset| reset.abs_diff(*resets_at) <= 1)
+            });
         }
         if let Some(pending) = &self.pending {
             if record.observed_at < pending.observed_at {
@@ -337,7 +375,11 @@ impl Accumulator {
             if point.observed_at.saturating_sub(previous.observed_at) > GAP_SECONDS {
                 point.break_before.push(BreakReason::MissingTime);
             }
-            let same_reset = match (self.reset_anchor, point.resets_at) {
+            let reset_anchor = match &self.request.range {
+                HistoryRange::Window { resets_at, .. } => Some(*resets_at),
+                _ => self.reset_anchor,
+            };
+            let same_reset = match (reset_anchor, point.resets_at) {
                 (Some(anchor), Some(reset)) => anchor.abs_diff(reset) <= 1,
                 (None, None) => true,
                 _ => false,
@@ -828,6 +870,231 @@ mod tests {
             repeated_hour
         );
         assert_eq!(autumn.timezone, "Europe/Warsaw");
+    }
+
+    #[test]
+    fn window_query_retains_only_original_readings_inside_its_observed_bounds() {
+        let observed = timestamp("2026-10-01T12:00:00Z");
+        let reset = observed + 9_000;
+        let start = reset - 18_000;
+        let range = HistoryRange::Window {
+            resets_at: reset,
+            observed_at: observed,
+        };
+        let mut query = accumulator(range.clone(), observed + 600, 20.0);
+        assert_eq!(query.reader_boundaries(), (Some(start), observed + 1));
+        query.observe(record(start - 1, 0.99, Some(reset))).unwrap();
+        query.observe(record(start, 0.1, Some(reset))).unwrap();
+        let mut other = record(start + 60, 0.99, Some(reset));
+        other.account_key = "b".repeat(64);
+        query.observe(other).unwrap();
+        let mut other = record(start + 90, 0.99, Some(reset));
+        other.provider = ProviderId::Codex;
+        query.observe(other).unwrap();
+        query
+            .observe(record(start + 120, 0.25, Some(reset)))
+            .unwrap();
+        query.observe(record(observed, 0.7, Some(reset))).unwrap();
+        query
+            .observe(record(observed + 1, 0.99, Some(reset)))
+            .unwrap();
+        let result = query.finish().unwrap();
+        assert_eq!(result.request.range, range);
+        assert_eq!((result.from, result.until), (start, observed + 1));
+        assert_eq!(result.points.len(), 3);
+        assert_eq!(result.points[0].observed_at, start);
+        assert_eq!(result.points[2].observed_at, observed);
+        assert_eq!(result.points[2].used_fraction, 0.7);
+        assert!(result.points[1].break_before.is_empty());
+        assert_eq!(result.points[2].break_before, [BreakReason::MissingTime]);
+        assert_eq!(
+            serde_json::to_value(&range).unwrap(),
+            serde_json::json!({ "kind": "window", "resets_at": reset, "observed_at": observed })
+        );
+    }
+
+    #[test]
+    fn window_query_uses_requested_reset_as_jitter_anchor_without_rewriting_values() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        let reset = first + 18_000;
+        let observed = first + 600;
+        let mut query = accumulator(
+            HistoryRange::Window {
+                resets_at: reset,
+                observed_at: observed,
+            },
+            observed,
+            20.0,
+        );
+        let offsets = [-1, 1, 0, -1, 1];
+        for (index, offset) in offsets.into_iter().enumerate() {
+            query
+                .observe(record(first + index as i64 * 60, 0.4, Some(reset + offset)))
+                .unwrap();
+        }
+        let result = query.finish().unwrap();
+        assert_eq!(result.points.len(), offsets.len());
+        assert!(
+            result
+                .points
+                .iter()
+                .all(|point| point.break_before.is_empty())
+        );
+        assert_eq!(
+            result
+                .points
+                .iter()
+                .map(|point| point.resets_at)
+                .collect::<Vec<_>>(),
+            offsets
+                .into_iter()
+                .map(|offset| Some(reset + offset))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn window_query_breaks_across_other_resets_missing_windows_and_usage_decreases() {
+        let first = timestamp("2026-10-01T08:00:00Z");
+        let reset = first + 18_000;
+        let observed = first + 5_000;
+        let mut query = accumulator(
+            HistoryRange::Window {
+                resets_at: reset,
+                observed_at: observed,
+            },
+            observed,
+            20.0,
+        );
+        query.observe(record(first, 0.1, Some(reset))).unwrap();
+        for (index, different_reset) in [Some(reset + 2), Some(reset - 2), None]
+            .into_iter()
+            .enumerate()
+        {
+            query
+                .observe(record(
+                    first + 60 + index as i64 * 60,
+                    0.99,
+                    different_reset,
+                ))
+                .unwrap();
+        }
+        query
+            .observe(record(first + 240, 0.2, Some(reset)))
+            .unwrap();
+        for index in 0..3 {
+            let mut other = record(first + 300 + index * 60, 0.99, Some(reset));
+            match index {
+                0 => other.limits[0].id = "weekly".into(),
+                1 => other.limits[0].window_seconds = Some(604_800),
+                _ => other.limits[0].provenance = Provenance::LocalEstimate,
+            }
+            query.observe(other).unwrap();
+        }
+        query
+            .observe(record(first + 480, 0.3, Some(reset)))
+            .unwrap();
+        query
+            .observe(record(first + 540, 0.25, Some(reset)))
+            .unwrap();
+        query
+            .observe(record(first + 2_341, 0.4, Some(reset)))
+            .unwrap();
+        let result = query.finish().unwrap();
+        assert_eq!(result.points.len(), 5);
+        assert_eq!(
+            result.points[1].break_before,
+            [BreakReason::LimitUnavailable]
+        );
+        assert_eq!(
+            result.points[2].break_before,
+            [BreakReason::LimitUnavailable]
+        );
+        assert_eq!(result.points[3].break_before, [BreakReason::UsageDecreased]);
+        assert_eq!(result.points[4].break_before, [BreakReason::MissingTime]);
+        assert!(
+            result
+                .points
+                .iter()
+                .all(|point| point.resets_at == Some(reset))
+        );
+    }
+
+    #[test]
+    fn weekly_window_queries_retain_raw_points_across_calendar_days() {
+        let start = timestamp("2026-09-28T10:00:00Z");
+        let observed = timestamp("2026-10-01T12:00:00Z");
+        let reset = start + 604_800;
+        let mut request = request(HistoryRange::Window {
+            resets_at: reset,
+            observed_at: observed,
+        });
+        request.limit.window_seconds = Some(604_800);
+        let mut query =
+            Accumulator::new(request, Calendar::named("UTC").unwrap(), observed, 20.0).unwrap();
+        for (at, used) in [(start, 0.1), (start + 86_400, 0.2), (observed, 0.3)] {
+            let mut sample = record(at, used, Some(reset));
+            sample.limits[0].window_seconds = Some(604_800);
+            query.observe(sample).unwrap();
+        }
+        let result = query.finish().unwrap();
+        assert_eq!(result.from, start);
+        assert_eq!(result.days.len(), 4);
+        assert_eq!(result.days[2].sample_count, 0);
+        assert_eq!(result.points.len(), 3);
+        assert_eq!(result.points[1].break_before, [BreakReason::MissingTime]);
+    }
+
+    #[test]
+    fn window_queries_reject_invalid_bounds_and_oversized_windows() {
+        let now = timestamp("2026-10-01T12:00:00Z");
+        for (duration, reset, observed) in [
+            (None, now + 9_000, now),
+            (Some(0), now + 9_000, now),
+            (Some(MAX_WINDOW_SECONDS + 1), now + 9_000, now),
+            (Some(u64::MAX), now + 9_000, now),
+            (Some(18_000), now + 9_000, now + 1),
+            (Some(18_000), now + 18_001, now),
+            (Some(18_000), now, now),
+            (Some(18_000), now - 1, now),
+            (Some(18_000), i64::MIN, now),
+            (Some(18_000), i64::MAX, now),
+        ] {
+            let mut selection = request(HistoryRange::Window {
+                resets_at: reset,
+                observed_at: observed,
+            });
+            selection.limit.window_seconds = duration;
+            assert!(matches!(
+                Accumulator::new(selection, Calendar::named("UTC").unwrap(), now, 20.0),
+                Err(QueryError::InvalidRange | QueryError::InvalidSelection)
+            ));
+        }
+    }
+
+    #[test]
+    fn window_queries_keep_the_raw_point_limit() {
+        let now = timestamp("2026-10-01T12:00:00Z");
+        let reset = now + 9_000;
+        let mut query = accumulator(
+            HistoryRange::Window {
+                resets_at: reset,
+                observed_at: now,
+            },
+            now,
+            20.0,
+        );
+        query.points.resize(
+            MAX_POINTS,
+            Point {
+                observed_at: now - 1,
+                used_fraction: 0.1,
+                resets_at: Some(reset),
+                break_before: Vec::new(),
+            },
+        );
+        query.observe(record(now, 0.2, Some(reset))).unwrap();
+        assert!(matches!(query.finish(), Err(QueryError::TooLarge)));
     }
 
     #[test]

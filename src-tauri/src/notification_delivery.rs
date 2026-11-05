@@ -11,9 +11,11 @@ use crate::{
     availability_watches::WatchSummary,
     model::ProviderId,
     notifications::{LowAllowance, availability::RecoveredAllowance},
+    pace_notifications::PaceAlert,
     platform::notifications::{self as native, Authorization, Message, PermissionState},
     providers,
     runtime::{self, AvailabilityTicket, NotificationTicket, Runtime, WatchProviderStatus},
+    settings::PaceNotificationScope,
 };
 
 #[derive(Default)]
@@ -32,6 +34,8 @@ struct DeliveryState {
 #[derive(Serialize)]
 pub struct NotificationStatus {
     enabled: bool,
+    pace_enabled: bool,
+    pace_scope: PaceNotificationScope,
     permission: Option<PermissionState>,
     error: Option<String>,
 }
@@ -121,17 +125,15 @@ pub async fn state(app: &AppHandle) -> Result<NotificationStatus, String> {
 }
 
 async fn status(app: &AppHandle, saved: &DeliveryState) -> Result<NotificationStatus, String> {
-    let enabled = app
-        .state::<Runtime>()
-        .state()?
-        .settings
-        .notifications_enabled;
+    let settings = app.state::<Runtime>().state()?.settings;
     let (permission, error) = match remember_permission(app, native::state().await) {
         Ok(permission) => (Some(permission), saved.error.clone()),
         Err(error) => (None, Some(error)),
     };
     Ok(NotificationStatus {
-        enabled,
+        enabled: settings.notifications_enabled,
+        pace_enabled: settings.pace_notifications_enabled,
+        pace_scope: settings.pace_notifications_scope,
         permission,
         error,
     })
@@ -159,13 +161,9 @@ pub async fn set_enabled(app: &AppHandle, enabled: bool) -> Result<NotificationS
 pub async fn send_test(app: &AppHandle) -> Result<(), String> {
     let delivery = app.state::<Delivery>();
     let mut saved = delivery.actions.lock().await;
-    if !app
-        .state::<Runtime>()
-        .state()?
-        .settings
-        .notifications_enabled
-    {
-        return Err("Enable low-allowance notifications before sending a test.".into());
+    let settings = app.state::<Runtime>().state()?.settings;
+    if !settings.notifications_enabled && !settings.pace_notifications_enabled {
+        return Err("Enable usage notifications before sending a test.".into());
     }
     let permission = remember_permission(app, native::state().await)?;
     if let Some(error) = permission_error(&permission) {
@@ -181,7 +179,7 @@ pub async fn send_test(app: &AppHandle) -> Result<(), String> {
     let result = native::send(Message {
         identifier: identifier(&delivery, "test"),
         title: "Delta-V test notification".into(),
-        body: "Low-allowance notifications are enabled. This is a test, not a usage alert.".into(),
+        body: "Usage notifications are enabled. Delta-V is ready to send alerts.".into(),
     })
     .await
     .map_err(|error| error.to_string());
@@ -210,14 +208,18 @@ pub fn observe(app: &AppHandle, ticket: NotificationTicket) {
         if let Err(error) = permission {
             saved.error = Some(error.to_string());
         }
-        if candidates.is_empty() || !runtime.notification_ticket_current(&ticket) {
+        if (candidates.low.is_empty() && candidates.pace.is_empty())
+            || !runtime.notification_ticket_current(&ticket)
+        {
             return;
         }
-        candidates.retain(|candidate| candidate.resets_at > providers::now());
+        candidates
+            .low
+            .retain(|candidate| candidate.resets_at > providers::now());
+        candidates
+            .pace
+            .retain(|candidate| candidate.resets_at > providers::now());
         let Ok(view) = runtime.state() else { return };
-        let Some(body) = allowance_body(&candidates, view.settings.threshold) else {
-            return;
-        };
         let provider = match ticket.snapshot.provider {
             ProviderId::Claude => "Claude",
             ProviderId::Codex => "Codex",
@@ -226,14 +228,94 @@ pub fn observe(app: &AppHandle, ticket: NotificationTicket) {
             return;
         }
         // Candidates are consumed once, even if macOS rejects delivery. Never replay old alerts.
-        let result = native::send(Message {
-            identifier: identifier(&delivery, "allowance"),
-            title: format!("{provider} allowance is low"),
-            body,
-        })
-        .await;
-        saved.error = result.err().map(|error| error.to_string());
+        let mut failed = false;
+        if let Some(body) = allowance_body(&candidates.low, view.settings.threshold) {
+            match native::send(Message {
+                identifier: identifier(&delivery, "allowance"),
+                title: format!("{provider} allowance is low"),
+                body,
+            })
+            .await
+            {
+                Err(error) => {
+                    saved.error = Some(error.to_string());
+                    failed = true;
+                }
+                Ok(()) => saved.error = None,
+            }
+        }
+        for candidate in candidates.pace {
+            if !runtime.notification_ticket_current(&ticket) {
+                return;
+            }
+            let now = providers::now();
+            if candidate.resets_at <= now {
+                continue;
+            }
+            match native::send(Message {
+                identifier: identifier(&delivery, "pace"),
+                title: format!("{provider} usage is above pace"),
+                body: pace_body(&candidate, now),
+            })
+            .await
+            {
+                Err(error) => {
+                    saved.error = Some(error.to_string());
+                    failed = true;
+                }
+                Ok(()) if !failed => saved.error = None,
+                Ok(()) => {}
+            }
+        }
     });
+}
+
+pub async fn set_pace_enabled(
+    app: &AppHandle,
+    enabled: bool,
+    scope: PaceNotificationScope,
+) -> Result<NotificationStatus, String> {
+    let delivery = app.state::<Delivery>();
+    let mut saved = delivery.actions.lock().await;
+    let current = app.state::<Runtime>().state()?.settings;
+    // Changing the saved scope remains available while macOS permission is blocked.
+    // Explicitly enabling or restoring the same preference may request permission.
+    if enabled && (!current.pace_notifications_enabled || current.pace_notifications_scope == scope)
+    {
+        let mut permission = remember_permission(app, native::state().await)?;
+        if should_request_permission(&permission) {
+            permission = remember_permission(app, native::request_authorization().await)?;
+        }
+        if let Some(error) = permission_error(&permission) {
+            return Err(error);
+        }
+    }
+    app.state::<Runtime>()
+        .set_pace_notifications(enabled, scope)?;
+    saved.error = None;
+    runtime::publish(app);
+    status(app, &saved).await
+}
+
+fn pace_body(candidate: &PaceAlert, now: i64) -> String {
+    let mut label: String = candidate.label.chars().take(80).collect();
+    if candidate.label.chars().count() > 80 {
+        label.push_str("...");
+    }
+    let remaining = if candidate.remaining_percent > 0.0 && candidate.remaining_percent < 1.0 {
+        "<1".to_owned()
+    } else {
+        candidate.remaining_percent.floor().to_string()
+    };
+    let minutes = (candidate.resets_at.saturating_sub(now).max(1) as u64).div_ceil(60);
+    let duration = if minutes >= 1440 {
+        format!("{}d {}h", minutes / 1440, (minutes % 1440) / 60)
+    } else if minutes >= 60 {
+        format!("{}h {}m", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes}m")
+    };
+    format!("{label}: {remaining}% remaining. Resets in {duration}.")
 }
 
 pub fn observe_availability(app: &AppHandle, ticket: AvailabilityTicket) {
@@ -398,6 +480,32 @@ fn allowance_body(candidates: &[LowAllowance], threshold: u8) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pace_wording_names_the_quota_remaining_allowance_and_reset_duration() {
+        let mut candidate = PaceAlert {
+            provider: ProviderId::Claude,
+            limit_id: "weekly".into(),
+            label: "Weekly".into(),
+            remaining_percent: 18.8,
+            resets_at: 1000 + 2 * 86400 + 3 * 3600,
+        };
+        assert_eq!(
+            pace_body(&candidate, 1000),
+            "Weekly: 18% remaining. Resets in 2d 3h."
+        );
+        candidate.remaining_percent = 0.0001;
+        candidate.resets_at = 1300;
+        assert_eq!(
+            pace_body(&candidate, 1000),
+            "Weekly: <1% remaining. Resets in 5m."
+        );
+        candidate.remaining_percent = 0.0;
+        assert_eq!(
+            pace_body(&candidate, 1000),
+            "Weekly: 0% remaining. Resets in 5m."
+        );
+    }
 
     #[test]
     fn only_an_available_undecided_permission_can_prompt() {
