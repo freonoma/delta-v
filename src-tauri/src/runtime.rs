@@ -51,11 +51,31 @@ pub struct ProviderState {
     pub snapshot: Option<ProviderSnapshot>,
     /// Changes with the accepted reading before it is published to either window.
     pub reading_id: Option<String>,
+    /// First reading ID in an uninterrupted series from the same account.
+    pub reading_scope: Option<String>,
     pub error: Option<Issue>,
     pub recovery: Option<RecoveryStage>,
     pub refreshing: bool,
     pub stale: bool,
     pub next_retry_at: Option<i64>,
+}
+
+#[derive(PartialEq)]
+enum ReadingIdentity<'a> {
+    Account(ProviderId, &'a str),
+    ClaudeCredential(credentials::TokenFingerprint),
+}
+
+fn reading_identity(snapshot: &ProviderSnapshot) -> Option<ReadingIdentity<'_>> {
+    if let Some(account) = snapshot.history_account.as_deref() {
+        return Some(ReadingIdentity::Account(snapshot.provider, account));
+    }
+    if snapshot.provider == ProviderId::Claude {
+        return snapshot
+            .claude_credential
+            .map(ReadingIdentity::ClaudeCredential);
+    }
+    None
 }
 
 #[derive(Clone, PartialEq, Serialize)]
@@ -212,6 +232,7 @@ impl Runtime {
                         id,
                         snapshot: None,
                         reading_id: None,
+                        reading_scope: None,
                         error: None,
                         recovery: None,
                         refreshing: false,
@@ -1137,6 +1158,7 @@ fn change_connection(inner: &mut Inner, index: usize, enabled: bool, now: i64) {
     schedule.generation = schedule.generation.wrapping_add(1);
     state.snapshot = None;
     state.reading_id = None;
+    state.reading_scope = None;
     state.error = None;
     state.stale = true;
     state.next_retry_at = None;
@@ -1323,6 +1345,7 @@ fn begin_recovery(
     // Sign-in can select another account, so the previous account's reading must disappear.
     state.snapshot = None;
     state.reading_id = None;
+    state.reading_scope = None;
     state.error = None;
     state.next_retry_at = None;
     state.stale = true;
@@ -1624,6 +1647,7 @@ fn complete_recovery(
     });
     state.snapshot = None;
     state.reading_id = None;
+    state.reading_scope = None;
     state.stale = true;
     state.next_retry_at = Some(schedule.next_due);
     None
@@ -2007,12 +2031,22 @@ fn apply_result(
             schedule.service_wait = None;
             state.error = None;
             state.next_retry_at = None;
-            state.reading_id = Some(READING_SEQUENCE.fetch_add(1, Ordering::Relaxed).to_string());
+            let reading_id = READING_SEQUENCE.fetch_add(1, Ordering::Relaxed).to_string();
+            let identity = reading_identity(&snapshot);
+            if identity.is_none() || snapshot.provider != state.id {
+                state.reading_scope = None;
+            } else if state.reading_scope.is_none()
+                || state.snapshot.as_ref().and_then(reading_identity) != identity
+            {
+                state.reading_scope = Some(reading_id.clone());
+            }
+            state.reading_id = Some(reading_id);
             state.snapshot = Some(snapshot);
             state.stale = is_stale(state, now, cadence);
         }
         Err(error) => {
             inner.pace_notifications.reset_baseline(state.id);
+            state.reading_scope = None;
             schedule.failures = schedule.failures.saturating_add(1);
             schedule.waiting_for_sign_in = error.requires_sign_in();
             schedule.cooldown_issue = (!schedule.waiting_for_sign_in).then(|| error.issue());
@@ -2221,6 +2255,56 @@ mod tests {
         state.schedules[0].poll_generation = Some(0);
         change_connection(&mut state, 0, false, 102);
         assert!(finish_poll(&mut state, 0, 0, 103, Ok(snapshot)).is_none());
+    }
+
+    fn accept_scope(state: &mut Inner, snapshot: &ProviderSnapshot) -> Option<String> {
+        state.schedules[0].poll_generation = Some(0);
+        finish_poll(state, 0, 0, snapshot.fetched_at, Ok(snapshot.clone())).unwrap();
+        state.view.providers[0].reading_scope.clone()
+    }
+
+    #[test]
+    fn reading_scope_tracks_the_verified_account_across_token_rotation() {
+        let mut state = inner();
+        let mut reading = notification_reading(100, 0.8);
+        reading.claude_credential = Some(credentials::TokenFingerprint::new("first"));
+        let scope = accept_scope(&mut state, &reading).unwrap();
+        assert_eq!(state.view.providers[0].reading_id.as_ref(), Some(&scope));
+        let view = serde_json::to_value(&state.view.providers[0]).unwrap();
+        assert_eq!(view["reading_scope"], scope);
+        assert!(view["snapshot"].get("claude_credential").is_none());
+        assert!(view["snapshot"].get("history_account").is_none());
+        reading.claude_credential = Some(credentials::TokenFingerprint::new("renewed"));
+        assert_eq!(accept_scope(&mut state, &reading).as_ref(), Some(&scope));
+        assert_ne!(state.view.providers[0].reading_id.as_ref(), Some(&scope));
+
+        reading.history_account = Some("other-account".into());
+        let switched = accept_scope(&mut state, &reading).unwrap();
+        assert_ne!(switched, scope);
+        state.schedules[0].poll_generation = Some(0);
+        finish_poll(&mut state, 0, 0, 101, Err(ProviderError::Network));
+        assert!(state.view.providers[0].reading_scope.is_none());
+        assert_ne!(accept_scope(&mut state, &reading).unwrap(), switched);
+        change_connection(&mut state, 0, false, 102);
+        assert!(state.view.providers[0].reading_scope.is_none());
+    }
+
+    #[test]
+    fn reading_scope_can_follow_claude_with_history_and_profile_lookups_off() {
+        let mut state = inner();
+        let mut reading = notification_reading(100, 0.8);
+        reading.history_account = None;
+        assert!(!state.view.settings.history_recording);
+        assert!(!needs_notification_identity(&state, ProviderId::Claude));
+        assert_eq!(accept_scope(&mut state, &reading), None);
+
+        reading.claude_credential = Some(credentials::TokenFingerprint::new("first"));
+        let scope = accept_scope(&mut state, &reading).unwrap();
+        assert_eq!(accept_scope(&mut state, &reading).as_ref(), Some(&scope));
+        reading.claude_credential = Some(credentials::TokenFingerprint::new("different"));
+        assert_ne!(accept_scope(&mut state, &reading).unwrap(), scope);
+        reading.provider = ProviderId::Codex;
+        assert!(reading_identity(&reading).is_none());
     }
 
     #[test]
@@ -2797,6 +2881,9 @@ mod tests {
             let mut state = inner();
             let draft = DisplayPreferences {
                 show_pacing: true,
+                claude_mascot: true,
+                codex_mascot: true,
+                mascot_animation: false,
                 tracked_limit: "codex:weekly".into(),
                 threshold: 15,
                 refresh_seconds: 120,
@@ -2843,6 +2930,9 @@ mod tests {
             assert_eq!(saved.refresh_seconds, draft.refresh_seconds);
             assert_eq!(saved.theme, draft.theme);
             assert_eq!(saved.ui_style, draft.ui_style);
+            assert_eq!(saved.claude_mascot, draft.claude_mascot);
+            assert_eq!(saved.codex_mascot, draft.codex_mascot);
+            assert_eq!(saved.mascot_animation, draft.mascot_animation);
             assert_eq!(saved.percentage_mode, draft.percentage_mode);
             assert_eq!(saved.claude_windows, draft.claude_windows);
             assert_eq!(saved.codex_windows, draft.codex_windows);
@@ -2991,10 +3081,12 @@ mod tests {
                 providers: vec![ProviderState {
                     id: ProviderId::Claude,
                     reading_id: Some("initial".into()),
+                    reading_scope: None,
                     snapshot: Some(ProviderSnapshot {
                         provider: ProviderId::Claude,
                         history_account: None,
                         history_generation: None,
+                        claude_credential: None,
                         plan: None,
                         fetched_at: 100,
                         warnings: vec![],

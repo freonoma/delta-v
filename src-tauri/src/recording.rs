@@ -498,6 +498,7 @@ mod tests {
             warnings: vec![],
             history_account: Some("a".repeat(64)),
             history_generation: recorder.ticket(),
+            claude_credential: None,
             limits: vec![Limit {
                 id: "session".into(),
                 label: "5-hour".into(),

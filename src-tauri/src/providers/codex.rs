@@ -16,6 +16,7 @@ pub fn parse(value: Value, fetched_at: i64) -> Result<ProviderSnapshot, String> 
         warnings: Vec::new(),
         history_account: None,
         history_generation: None,
+        claude_credential: None,
     };
     for (key, label) in [
         ("rate_limit", ""),

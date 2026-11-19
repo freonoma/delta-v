@@ -39,6 +39,7 @@ impl Fixture {
                     .map(|provider| ProviderState {
                         id: provider,
                         reading_id: Some("initial".into()),
+                        reading_scope: None,
                         snapshot: Some(reading(provider, 100, 1.0)),
                         error: None,
                         recovery: None,
@@ -100,6 +101,7 @@ fn reading(provider: ProviderId, fetched_at: i64, used_fraction: f64) -> Provide
         warnings: Vec::new(),
         history_account: Some("a".repeat(64)),
         history_generation: None,
+        claude_credential: None,
     }
 }
 

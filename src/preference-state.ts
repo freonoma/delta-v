@@ -19,6 +19,9 @@ export function displayPreferences(settings: DisplayPreferences): DisplayPrefere
     ui_style: settings.ui_style,
     percentage_mode: settings.percentage_mode,
     show_pacing: settings.show_pacing,
+    claude_mascot: settings.claude_mascot,
+    codex_mascot: settings.codex_mascot,
+    mascot_animation: settings.mascot_animation,
     claude_windows: [...settings.claude_windows],
     codex_windows: [...settings.codex_windows],
   };

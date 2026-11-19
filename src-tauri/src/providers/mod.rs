@@ -123,6 +123,8 @@ impl Provider for ClaudeProvider<'_> {
     async fn fetch(&self) -> Result<ProviderSnapshot, ProviderError> {
         let (value, credential) = fetch_json(self.id(), self.client).await?;
         let mut snapshot = claude::parse(value, now()).map_err(ProviderError::Response)?;
+        snapshot.claude_credential =
+            Some(credentials::TokenFingerprint::new(&credential.access_token));
         if let Some(identity) = self.identity {
             snapshot.history_account = identity.claude(self.client, &credential.access_token).await;
         }

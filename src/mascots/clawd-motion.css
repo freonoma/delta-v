@@ -1,0 +1,27 @@
+@media (prefers-reduced-motion: no-preference) {
+  .panel-mascot[data-provider="claude"][data-motion="patrol"] .panel-mascot-art {
+    --outward: 15px;
+    --across: -15px;
+    --patrol-sheet: url("./official/clawd-patrol.png");
+    --standing-transform: none;
+    animation: clawd-patrol var(--patrol-duration, 4s) linear both;
+  }
+
+  .panel-mascot[data-provider="claude"][data-pose="low"][data-motion="patrol"] .panel-mascot-art {
+    --outward: -12px;
+    --across: 10px;
+    --patrol-sheet: url("./official/clawd-patrol-low.png");
+    --standing-transform: translateY(1px) rotate(-3deg);
+  }
+}
+
+/* The feet start and finish each crossing on contact frames. The holds leave
+   enough time to plant both feet, look around, and face the return path. */
+@keyframes clawd-patrol {
+  0%, 100% { transform: var(--standing-transform); }
+  5%, 95% { transform: none; }
+  0%, 2% { translate: 0 0; animation-timing-function: cubic-bezier(.32, .08, .6, 1); }
+  22%, 37.5% { translate: var(--outward) 0; animation-timing-function: cubic-bezier(.26, .12, .7, .97); }
+  71%, 79% { translate: var(--across) 0; animation-timing-function: cubic-bezier(.3, .05, .65, 1); }
+  97%, 100% { translate: 0 0; }
+}

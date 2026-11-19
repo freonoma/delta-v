@@ -124,6 +124,9 @@ export interface Settings {
   ui_style: UiStyle;
   percentage_mode: PercentageMode;
   show_pacing: boolean;
+  claude_mascot: boolean;
+  codex_mascot: boolean;
+  mascot_animation: boolean;
   claude_windows: string[];
   codex_windows: string[];
 }
@@ -150,7 +153,7 @@ export interface NotificationStatus {
 
 export type DisplayPreferences = Pick<Settings,
   "tracked_limit" | "threshold" | "refresh_seconds" | "theme" | "ui_style" | "percentage_mode"
-  | "claude_windows" | "codex_windows" | "show_pacing">;
+  | "claude_windows" | "codex_windows" | "show_pacing" | "claude_mascot" | "codex_mascot" | "mascot_animation">;
 
 export interface Amount {
   used: string | null;
@@ -183,6 +186,7 @@ export interface ProviderSnapshot {
 export interface ProviderState {
   id: ProviderId;
   reading_id?: string | null;
+  reading_scope?: string | null;
   snapshot: ProviderSnapshot | null;
   error: ProviderIssue | null;
   recovery: RecoveryPhase | null;

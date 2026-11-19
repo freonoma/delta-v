@@ -58,6 +58,7 @@ fn snapshot(at: i64, used: f64) -> ProviderSnapshot {
         warnings: Vec::new(),
         history_account: Some(ACCOUNT_A.into()),
         history_generation: None,
+        claude_credential: None,
     }
 }
 

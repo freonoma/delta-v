@@ -48,6 +48,9 @@ export function isSettingsDraftDirty(draft: SettingsDraft, baseline: SettingsDra
     || current.ui_style !== saved.ui_style
     || current.percentage_mode !== saved.percentage_mode
     || current.show_pacing !== saved.show_pacing
+    || current.claude_mascot !== saved.claude_mascot
+    || current.codex_mascot !== saved.codex_mascot
+    || current.mascot_animation !== saved.mascot_animation
     || !sameWindows(current.claude_windows, saved.claude_windows)
     || !sameWindows(current.codex_windows, saved.codex_windows)
     || draft.layout !== baseline.layout
@@ -87,6 +90,9 @@ export function reconcileSettingsDraft(draft: SettingsDraft, baseline: SettingsD
       ui_style: current.ui_style === saved.ui_style ? next.ui_style : current.ui_style,
       percentage_mode: current.percentage_mode === saved.percentage_mode ? next.percentage_mode : current.percentage_mode,
       show_pacing: current.show_pacing === saved.show_pacing ? next.show_pacing : current.show_pacing,
+      claude_mascot: current.claude_mascot === saved.claude_mascot ? next.claude_mascot : current.claude_mascot,
+      codex_mascot: current.codex_mascot === saved.codex_mascot ? next.codex_mascot : current.codex_mascot,
+      mascot_animation: current.mascot_animation === saved.mascot_animation ? next.mascot_animation : current.mascot_animation,
       claude_windows: [...(sameWindows(current.claude_windows, saved.claude_windows) ? next.claude_windows : current.claude_windows)],
       codex_windows: [...(sameWindows(current.codex_windows, saved.codex_windows) ? next.codex_windows : current.codex_windows)],
       // The editable text is authoritative until validation creates the save payload.

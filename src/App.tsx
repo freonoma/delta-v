@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Amount, Limit, PercentageMode, ProviderId, ProviderState, ReconnectAction, RecoveryPhase, Settings } from "./types";
 import { Startup } from "./Startup";
 import { MiniView } from "./MiniView";
+import { ProviderMascot } from "./mascots/PanelMascot";
 import { allowancePace } from "./pacing";
 import { PaceGuide, PaceMarker } from "./PaceGuide";
 import { HistoryView } from "./HistoryView";
@@ -172,7 +173,7 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
             <div className="remaining-number">{wholePercent(percentage, settings.percentage_mode)}<span>%</span></div>
             <div className="remaining-copy">
               <span>{settings.percentage_mode}</span>
-              <span className="featured-label">{featured?.label}</span>
+              <span className="featured-label" title={featured?.label}>{featured?.label}</span>
             </div>
           </>
         ) : (
@@ -181,6 +182,9 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
             <span>{emptyDescription}</span>
           </div>
         )}
+        {(provider.id === "claude" ? settings.claude_mascot : settings.codex_mascot) &&
+          <ProviderMascot provider={provider} settings={settings} now={now}
+            expired={expired} recovering={recovery !== null} hasPercentage={percentage !== null} />}
       </div>}
       {(enabled || recovery) && <ProviderFeedback provider={provider} recovery={recovery} now={now} onReconnect={onReconnect} onCancel={onCancel} />}
       {stale && snapshot && <p className="stale-note">Showing the last reading from {sampleAge(snapshot.fetched_at, now)}.</p>}
@@ -217,13 +221,20 @@ function ProviderColumn({ provider, settings, now, expanded, pendingRecovery, co
 }
 
 export default function App() {
+  const controller = useAppController();
+  return <UsagePanel controller={controller} />;
+}
+
+export function UsagePanel({ controller }: {
+  controller: ReturnType<typeof useAppController>;
+}) {
   const {
     state, error, setError, now, login,
     panelPreferences, panelReady, panelBusy, panelCommandPending,
     saving, pendingRecovery, pendingConnection,
     selectProviders, changePanelPreferences,
     updateHistoryPreferences, refresh, reconnect, cancelReconnect, setProviderEnabled, retryInitialRead,
-  } = useAppController();
+  } = controller;
   const watches = useAvailabilityWatches(state);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);

@@ -74,6 +74,9 @@ pub struct Settings {
     pub codex_windows: Vec<String>,
     pub notifications_enabled: bool,
     pub show_pacing: bool,
+    pub claude_mascot: bool,
+    pub codex_mascot: bool,
+    pub mascot_animation: bool,
     pub pace_notifications_enabled: bool,
     pub pace_notifications_scope: PaceNotificationScope,
     pub history_recording: bool,
@@ -85,6 +88,9 @@ pub struct Settings {
 #[serde(deny_unknown_fields)]
 pub struct DisplayPreferences {
     pub show_pacing: bool,
+    pub claude_mascot: bool,
+    pub codex_mascot: bool,
+    pub mascot_animation: bool,
     pub tracked_limit: String,
     pub threshold: u8,
     pub refresh_seconds: u64,
@@ -99,6 +105,9 @@ impl DisplayPreferences {
     pub fn apply_to(self, current: &Settings) -> Result<Settings, SettingsError> {
         let mut settings = Settings {
             show_pacing: self.show_pacing,
+            claude_mascot: self.claude_mascot,
+            codex_mascot: self.codex_mascot,
+            mascot_animation: self.mascot_animation,
             tracked_limit: self.tracked_limit,
             threshold: self.threshold,
             refresh_seconds: self.refresh_seconds,
@@ -121,6 +130,9 @@ impl From<&Settings> for DisplayPreferences {
     fn from(settings: &Settings) -> Self {
         Self {
             show_pacing: settings.show_pacing,
+            claude_mascot: settings.claude_mascot,
+            codex_mascot: settings.codex_mascot,
+            mascot_animation: settings.mascot_animation,
             tracked_limit: settings.tracked_limit.clone(),
             threshold: settings.threshold,
             refresh_seconds: settings.refresh_seconds,
@@ -150,6 +162,9 @@ impl Default for Settings {
             codex_windows: Vec::new(),
             notifications_enabled: false,
             show_pacing: true,
+            claude_mascot: false,
+            codex_mascot: false,
+            mascot_animation: true,
             pace_notifications_enabled: false,
             pace_notifications_scope: PaceNotificationScope::Weekly,
             history_recording: false,
@@ -304,7 +319,14 @@ mod tests {
             expanded[field] = serde_json::json!(true);
             assert!(serde_json::from_value::<DisplayPreferences>(expanded).is_err());
         }
-        for field in ["theme", "ui_style", "show_pacing"] {
+        for field in [
+            "theme",
+            "ui_style",
+            "show_pacing",
+            "claude_mascot",
+            "codex_mascot",
+            "mascot_animation",
+        ] {
             let mut incomplete = payload.clone();
             incomplete.as_object_mut().unwrap().remove(field);
             assert!(serde_json::from_value::<DisplayPreferences>(incomplete).is_err());
@@ -396,12 +418,44 @@ mod tests {
         assert!(!settings.history_recording);
         assert!(!settings.notifications_enabled);
         assert!(settings.show_pacing);
+        assert!(!settings.claude_mascot);
+        assert!(!settings.codex_mascot);
+        assert!(settings.mascot_animation);
         assert!(!settings.pace_notifications_enabled);
         assert_eq!(
             settings.pace_notifications_scope,
             PaceNotificationScope::Weekly
         );
         assert_eq!(settings.history_retention, Retention::Forever);
+    }
+
+    #[test]
+    fn mascot_display_choices_round_trip_independently() {
+        let current = Settings::default();
+        for (claude_mascot, codex_mascot, mascot_animation) in [
+            (true, false, true),
+            (false, true, false),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            let draft = DisplayPreferences {
+                claude_mascot,
+                codex_mascot,
+                mascot_animation,
+                ..DisplayPreferences::from(&current)
+            };
+            let saved = draft.apply_to(&current).unwrap();
+            let restored: Settings = toml::from_str(&toml::to_string(&saved).unwrap()).unwrap();
+            assert_eq!(
+                restored,
+                Settings {
+                    claude_mascot,
+                    codex_mascot,
+                    mascot_animation,
+                    ..current.clone()
+                }
+            );
+        }
     }
 
     #[test]

@@ -20,6 +20,21 @@ pub struct Credential {
     pub account_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct TokenFingerprint([u8; 32]);
+
+impl TokenFingerprint {
+    pub fn new(token: &str) -> Self {
+        Self(Sha256::digest(token.as_bytes()).into())
+    }
+}
+
+impl std::fmt::Debug for TokenFingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TokenFingerprint")
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CredentialError {
     #[error("The home directory is unavailable.")]

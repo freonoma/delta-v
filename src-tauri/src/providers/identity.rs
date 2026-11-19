@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use super::{now, retry_after};
+use crate::credentials::TokenFingerprint;
 
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
@@ -15,13 +16,13 @@ pub struct IdentityCache {
 
 #[derive(Default)]
 struct CacheState {
-    cached: Option<([u8; 32], String)>,
+    cached: Option<(TokenFingerprint, String)>,
     failures: u32,
     retry_at: Option<i64>,
 }
 
 impl CacheState {
-    fn account(&self, fingerprint: &[u8; 32]) -> Option<String> {
+    fn account(&self, fingerprint: &TokenFingerprint) -> Option<String> {
         self.cached
             .as_ref()
             .filter(|(saved, _)| saved == fingerprint)
@@ -32,7 +33,7 @@ impl CacheState {
         self.retry_at.is_none_or(|retry| at >= retry)
     }
 
-    fn success(&mut self, fingerprint: [u8; 32], account: String) {
+    fn success(&mut self, fingerprint: TokenFingerprint, account: String) {
         self.cached = Some((fingerprint, account));
         self.failures = 0;
         self.retry_at = None;
@@ -49,8 +50,7 @@ impl CacheState {
 
 impl IdentityCache {
     pub async fn claude(&self, client: &Client, access_token: &str) -> Option<String> {
-        // Only the fingerprint stays in memory. Token rotation must never become an account key.
-        let fingerprint: [u8; 32] = Sha256::digest(access_token.as_bytes()).into();
+        let fingerprint = TokenFingerprint::new(access_token);
         let mut state = self.state.lock().await;
         if let Some(account) = state.account(&fingerprint) {
             return Some(account);
@@ -190,8 +190,8 @@ mod tests {
     #[test]
     fn cached_identity_is_bound_to_the_exact_successful_token() {
         let mut state = CacheState::default();
-        let first = [1; 32];
-        let refreshed = [2; 32];
+        let first = TokenFingerprint::new("first");
+        let refreshed = TokenFingerprint::new("refreshed");
         let account = account_key("claude", "user", "organization");
         state.success(first, account.clone());
         assert_eq!(state.account(&first), Some(account.clone()));
@@ -218,7 +218,7 @@ mod tests {
         );
         assert!(!state.can_request(9_999));
         assert!(state.can_request(10_000));
-        state.success([1; 32], "verified".into());
+        state.success(TokenFingerprint::new("first"), "verified".into());
         assert_eq!(state.failures, 0);
         assert!(state.can_request(10_000));
     }

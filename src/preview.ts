@@ -83,6 +83,7 @@ export function createPreview(search = ""): AppState {
   const resets = parameters.get("resets");
   const stale = parameters.get("stale") ?? (resets === "mixed" ? "codex" : null);
   const theme = parameters.get("theme");
+  const mascots = parameters.get("mascots");
   const weeklyOnly = parameters.get("pace") === "weekly";
   const codexFiveHour = !weeklyOnly && parameters.get("codex_5h") === "1";
   const claudeUltra = parameters.get("claude_ultra") === "1";
@@ -98,7 +99,7 @@ export function createPreview(search = ""): AppState {
       ? issue : cached ? previewIssues.find((candidate) => candidate.kind === "network") ?? null : null;
     const fetchedAt = now - (cached ? 480 : 24);
     return {
-      id, reading_id: `${id}:preview:1`,
+      id, reading_id: `${id}:preview:1`, reading_scope: enabled && !error ? id : null,
       snapshot: !enabled || (error && !cached) ? null : { provider: id, limits: resetPreviewLimits(pacePreviewLimits(weeklyOnly
         ? limits.filter((limit) => limit.id === "weekly" || limit.id === "rate_limit:primary_window") : limits, parameters.get("pace"), fetchedAt).map((limit, index) =>
         watchPreview && index === 0 ? { ...limit, used_fraction: 1,
@@ -112,7 +113,20 @@ export function createPreview(search = ""): AppState {
   const notifications = createNotificationPreview(search);
   return {
     revision: 0,
-    settings: { providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both", codex_enabled: disconnected !== "codex" && disconnected !== "both", launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1", notifications_enabled: notifications.enabled, pace_notifications_enabled: notifications.pace_enabled, pace_notifications_scope: notifications.pace_scope, show_pacing: parameters.get("pacing") !== "off", history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""), history_retention: "forever", tracked_limit: claudeUltra ? "claude:session" : "auto", threshold: 20, refresh_seconds: 60, theme: theme === "light" || theme === "dark" ? theme : "system", ui_style: parameters.get("style") === "legacy" ? "legacy" : "glass", percentage_mode: parameters.get("percentage") === "used" ? "used" : "remaining", claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [] },
+    settings: {
+      providers: "both", claude_enabled: disconnected !== "claude" && disconnected !== "both",
+      codex_enabled: disconnected !== "codex" && disconnected !== "both",
+      launch_at_login_prompt_dismissed: parameters.get("first_run") !== "1",
+      notifications_enabled: notifications.enabled, pace_notifications_enabled: notifications.pace_enabled,
+      pace_notifications_scope: notifications.pace_scope, show_pacing: parameters.get("pacing") !== "off",
+      claude_mascot: mascots === "claude" || mascots === "both", codex_mascot: mascots === "codex" || mascots === "both",
+      mascot_animation: parameters.get("mascot_motion") !== "off",
+      history_recording: ["ready", "waiting", "sparse", "error", "accounts"].includes(parameters.get("history") ?? ""),
+      history_retention: "forever", tracked_limit: claudeUltra ? "claude:session" : "auto", threshold: 20, refresh_seconds: 60,
+      theme: theme === "light" || theme === "dark" ? theme : "system", ui_style: parameters.get("style") === "legacy" ? "legacy" : "glass",
+      percentage_mode: parameters.get("percentage") === "used" ? "used" : "remaining",
+      claude_windows: parameters.get("missing_window") === "1" ? ["missing", "weekly"] : [], codex_windows: [],
+    },
     providers: [
       provider("claude", [
         ...(!claudeUltra ? [quota("session", "5-hour", 0.36, 18000, parameters.get("expired") === "1" ? -60 : 8120)] : []),

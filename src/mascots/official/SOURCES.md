@@ -1,0 +1,14 @@
+# Mascot artwork
+
+- `clawd.png` comes from [Anthropic’s Clawd still](https://claude.ai/images/clawd/core/Clawd-Still.png). Delta-V trims the transparent margins and scales the pixel art down.
+- `clawd-patrol.png` and `clawd-patrol-low.png` sequence poses from Anthropic’s `Clawd-CrabWalking` and `Clawd-Stretching` animations with the resting and winking poses. Both animations ship in Claude Desktop 6.6395.1, in `ion-dist.asar/assets/v1/c17418a32-i3N8X8Le.json` and `c64e5bbf5-FouWhtto.json`. Delta-V mirrors the crab walk for leftward steps and sets the route and pauses in the card.
+- `clawd-blink.png` pairs that still with the left-eye wink from Anthropic’s `Clawd-Laptop` animation. Frames 4–8 of the animation narrow that eye to a horizontal bar. Delta-V places the bar on the resting face so the body stays in place. The source animation ships in Claude Desktop 6.6395.1 as `ion-dist.asar/assets/v1/c838f53ee-6wng42uw.json`.
+- `clawd-reset.png` contains frames 3–16 of [Anthropic’s happy jump](https://claude.ai/images/clawd/core/Clawd-JumpingHappy.gif), numbered from zero. The strip starts and ends on the resting pose and omits the repeated holds on either side of the jump. The poses travel a shorter vertical distance to clear the card’s status label.
+- `codex-idle.png` is the first idle frame from [OpenAI’s Codex sprite sheet](https://persistent.oaistatic.com/codex/pets/v1/codex-spritesheet-v4.webp). The frame is the top-left 192 × 208 pixels with its transparent margins trimmed. OpenAI lists the character in the [Codex pet catalog](https://github.com/openai/codex/blob/main/codex-rs/tui/src/pets/catalog.rs).
+- `codex-patrol.webp` and `codex-laptop.webp` use the idle, rightward run, leftward run, wave, and laptop poses from rows 0, 1, 2, 3, and 7 of that sheet. Delta-V arranges the frames and controls the character’s travel and transitions.
+- `codex-blink.png` is the second idle frame in the same row. It uses the resting frame’s crop to keep the visor aligned while the eyes close.
+- `codex-reset.png` contains the first five cells of row 4 from the same sheet, numbered from zero. `codex-spent.png` is cell 3 of row 5 with transparent margins trimmed. OpenAI calls these rows [jumping and failed](https://github.com/openai/codex/blob/main/codex-rs/tui/src/pets/model.rs#L473-L485). Delta-V uses the latter expression for an exhausted allowance.
+
+The reset strips use 100 × 144 pixel cells displayed at 50 × 72 CSS pixels. Their lower edges align with the bottom of the existing 50 × 44 mascot slots so the resting poses keep their position throughout playback.
+
+Clawd is artwork from Anthropic. The Codex pet is artwork from OpenAI. The Delta-V MIT license covers the app code. The source pages do not identify a redistribution license for these sprites. See the [Anthropic trademark guidelines](https://www.anthropic.com/legal/trademark-guidelines) and [OpenAI design guidelines](https://openai.com/brand/).

@@ -57,4 +57,7 @@ pub struct ProviderSnapshot {
     pub history_account: Option<String>,
     #[serde(skip)]
     pub history_generation: Option<u64>,
+    /// Binds consecutive successful Claude usage responses when a profile was not requested.
+    #[serde(skip)]
+    pub claude_credential: Option<crate::credentials::TokenFingerprint>,
 }

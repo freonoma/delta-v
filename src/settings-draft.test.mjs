@@ -9,6 +9,7 @@ function settings(changes = {}) {
     providers: "both", claude_enabled: true, codex_enabled: true,
     launch_at_login_prompt_dismissed: false, history_recording: false, history_retention: "forever", notifications_enabled: false,
     pace_notifications_enabled: false, pace_notifications_scope: "weekly", show_pacing: true,
+    claude_mascot: false, codex_mascot: false, mascot_animation: true,
     tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
     theme: "system", ui_style: "glass", percentage_mode: "remaining", claude_windows: ["session"], codex_windows: [],
     ...changes,
@@ -22,6 +23,7 @@ test("drafts and save payloads contain only form-owned preferences and independe
     preferences: {
       tracked_limit: "codex:weekly", threshold: 20, refresh_seconds: 60,
       theme: "system", ui_style: "glass", percentage_mode: "remaining", show_pacing: true, claude_windows: ["session"], codex_windows: [],
+      claude_mascot: false, codex_mascot: false, mascot_animation: true,
     },
     threshold: "20", interval: "60", layout: "columns",
   });
@@ -40,6 +42,7 @@ test("dirty checks compare each owned field and preserve window order", () => {
   for (const change of [
     { tracked_limit: "auto" }, { theme: "dark" }, { ui_style: "legacy" }, { percentage_mode: "used" },
     { claude_windows: [] }, { codex_windows: ["weekly"] }, { show_pacing: false },
+    { claude_mascot: true }, { codex_mascot: true }, { mascot_animation: false },
   ]) {
     const draft = { ...baseline, preferences: { ...baseline.preferences, ...change } };
     assert.equal(isSettingsDraftDirty(draft, baseline), true);
@@ -204,4 +207,15 @@ test("an untouched pacing display follows external saves", () => {
   const reconciled = reconcileSettingsDraft(draft, baseline, next);
   assert.equal(reconciled.preferences.show_pacing, false);
   assert.equal(reconciled.preferences.theme, "dark");
+});
+
+test("a mascot draft keeps edited choices and picks up other saved choices", () => {
+  const baseline = createSettingsDraft(settings(), "columns");
+  const draft = { ...baseline, preferences: { ...baseline.preferences, codex_mascot: true } };
+  const next = createSettingsDraft(settings({ claude_mascot: true, mascot_animation: false }), "columns");
+  const reconciled = reconcileSettingsDraft(draft, baseline, next);
+  assert.deepEqual(validateSettingsDraft(reconciled, "both").preferences, {
+    ...next.preferences, codex_mascot: true,
+  });
+  assert.equal(isSettingsDraftDirty(reconciled, next), true);
 });

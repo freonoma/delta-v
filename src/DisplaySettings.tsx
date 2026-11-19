@@ -91,6 +91,22 @@ export function DisplaySettings({ state, now, draft, setDraft, layoutDraft, setL
           ))}
         </div>
       </fieldset>
+      <div className="setting-row">
+        <span><span id="panel-mascots-label">Panel mascots</span><small>Show mascots beside the usage percentages.</small></span>
+        <div className="mascot-choices" role="group" aria-labelledby="panel-mascots-label">
+          <label><input type="checkbox" checked={draft.claude_mascot}
+            onChange={(event) => setDraft({ ...draft, claude_mascot: event.target.checked })} />Claude</label>
+          <label><input type="checkbox" checked={draft.codex_mascot}
+            onChange={(event) => setDraft({ ...draft, codex_mascot: event.target.checked })} />Codex</label>
+        </div>
+      </div>
+      <div className="setting-row">
+        <span><span id="mascot-animation-label">Animate mascots</span><small id="mascot-animation-description">Mascots stay still when Reduce Motion is on in macOS.</small></span>
+        <button type="button" role="switch" className="startup-switch" aria-labelledby="mascot-animation-label"
+          aria-describedby="mascot-animation-description" aria-checked={draft.mascot_animation}
+          disabled={busy || (!draft.claude_mascot && !draft.codex_mascot)}
+          onClick={() => setDraft({ ...draft, mascot_animation: !draft.mascot_animation })}><span /></button>
+      </div>
       <label className="setting-row">
         <span>Menu bar tracks<small>{trackedFallback
           ? `Claude's five-hour window is not reported. Using ${trackedFallback.label} until it returns.`

@@ -1,0 +1,24 @@
+@media (prefers-reduced-motion: no-preference) {
+  .panel-mascot[data-provider="codex"][data-motion="patrol"] .panel-mascot-art {
+    --patrol-sheet: url("./official/codex-patrol.webp");
+    animation: codex-patrol var(--patrol-duration, 4.6s) cubic-bezier(.3, 0, .7, 1) both;
+  }
+
+  .panel-mascot[data-provider="codex"][data-motion="patrol"][data-pose="low"] .panel-mascot-art {
+    --patrol-sheet: url("./official/codex-laptop.webp");
+    animation-name: codex-laptop-break;
+  }
+}
+
+@keyframes codex-patrol {
+  0%, 2% { transform: translateX(0); }
+  21%, 25% { transform: translateX(-17px); }
+  58%, 75% { transform: translateX(17px); }
+  92%, 100% { transform: translateX(0); }
+}
+
+@keyframes codex-laptop-break {
+  0%, 100% { transform: translateY(1px) rotate(-3deg); }
+  18%, 72% { transform: translate(-9px, 1px); }
+  92% { transform: translateY(1px); }
+}

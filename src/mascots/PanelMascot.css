@@ -1,0 +1,128 @@
+.panel-mascot {
+  --idle-x: 0px;
+  --idle-y: -1px;
+  position: relative;
+  flex: 0 0 82px;
+  height: 44px;
+  margin-left: auto;
+  pointer-events: none;
+}
+
+.provider-column:has(.panel-mascot) { container-type: inline-size; }
+
+@container (max-width: 224px) {
+  .remaining-summary:has(.panel-mascot) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 82px;
+    row-gap: 3px;
+  }
+  .remaining-summary .remaining-copy { grid-column: 1; }
+  .panel-mascot {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    width: 82px;
+  }
+}
+
+.remaining-summary:has(.panel-mascot) .featured-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.panel-mascot-art {
+  position: absolute;
+  bottom: 0;
+  left: calc(50% - 25px);
+  width: 50px;
+  height: 100%;
+  background: var(--mascot-art) center / contain no-repeat;
+}
+
+.panel-mascot[data-provider="claude"] {
+  --mascot-art: url("./official/clawd.png");
+  --blink-art: url("./official/clawd-blink.png");
+  image-rendering: pixelated;
+}
+.panel-mascot[data-provider="codex"] {
+  --mascot-art: url("./official/codex-idle.png");
+  --blink-art: url("./official/codex-blink.png");
+  --idle-x: .65px;
+}
+.panel-mascot[data-pose="low"] { --idle-x: 0px; --idle-y: -.5px; }
+.panel-mascot[data-pose="low"] .panel-mascot-art { transform: translateY(1px) rotate(-3deg); }
+.panel-mascot[data-pose="unavailable"] { opacity: .55; }
+.panel-mascot[data-provider="claude"][data-pose="exhausted"] .panel-mascot-art {
+  transform: translateY(5px) rotate(-174deg) scale(.9);
+}
+.panel-mascot[data-provider="codex"][data-pose="exhausted"] {
+  --mascot-art: url("./official/codex-spent.png");
+}
+.panel-mascot[data-provider="codex"][data-pose="exhausted"] .panel-mascot-art {
+  filter: saturate(.7) brightness(.87);
+  transform: translateY(3px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel-mascot[data-motion="patrol"] .panel-mascot-art { background: none; }
+  /* The feet change pose in steps while the body travels continuously. */
+  .panel-mascot[data-motion="patrol"] .panel-mascot-art::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--patrol-sheet) 0 0 / 2400px 44px no-repeat;
+    animation: mascot-patrol-frames var(--patrol-duration) steps(48, jump-none) both;
+  }
+  .panel-mascot[data-motion="idle"] { animation: mascot-idle-rise 1150ms ease-in-out; }
+  .panel-mascot[data-motion="idle"] .panel-mascot-art { animation: mascot-blink 1150ms step-end; }
+  .panel-mascot[data-motion="glance"] .panel-mascot-art {
+    animation: mascot-glance 480ms ease-in-out;
+  }
+  .panel-mascot[data-motion="refill"] .panel-mascot-art {
+    height: 72px;
+    background-position: 0 0;
+    transform: none;
+  }
+  .panel-mascot[data-provider="claude"][data-motion="refill"] .panel-mascot-art {
+    background-image: url("./official/clawd-reset.png");
+    background-size: 700px 72px;
+    animation: clawd-refill 980ms steps(14, jump-none) both;
+  }
+  .panel-mascot[data-provider="codex"][data-motion="refill"] .panel-mascot-art {
+    background-image: url("./official/codex-reset.png");
+    background-size: 250px 72px;
+    animation: codex-refill 840ms step-end both;
+  }
+}
+
+@keyframes mascot-patrol-frames {
+  from { background-position-x: 0; }
+  to { background-position-x: -2350px; }
+}
+
+@keyframes mascot-idle-rise {
+  0%, 100% { transform: none; }
+  45% { transform: translate(var(--idle-x), var(--idle-y)); }
+}
+@keyframes mascot-blink {
+  0%, 58%, 100% { background-image: var(--mascot-art); }
+  44% { background-image: var(--blink-art); }
+}
+
+@keyframes mascot-glance {
+  0% { transform: none; }
+  45% { transform: translate(-2px, 3px) rotate(-9deg); }
+  100% { transform: translateY(1px) rotate(-3deg); }
+}
+@keyframes clawd-refill {
+  from { background-position: 0 0; }
+  to { background-position: -650px 0; }
+}
+@keyframes codex-refill {
+  0% { background-position: 0 0; }
+  16.667% { background-position: -50px 0; }
+  33.333% { background-position: -100px 0; }
+  50% { background-position: -150px 0; }
+  66.667%, 100% { background-position: -200px 0; }
+}

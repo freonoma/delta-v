@@ -104,6 +104,8 @@ Under **Settings → Display & usage → Compact view**, choose a first and opti
 
 Percentages show **remaining** usage by default. A window at 55% used has 45% remaining. Under **Settings → Display & usage → Show percentages as**, choose **Used** if you prefer. This changes the menu bar, the large provider percentages, and the usage bars together.
 
+To add Clawd or the Codex pet beside the large percentage in the full usage panel, open **Settings → Display & usage → Panel mascots**, select either or both providers, and choose **Save changes**. Both start off. The characters slow down as allowance runs low and can jump when a fresh reading confirms a refill. Turn off **Animate mascots** for still poses. Mascots also stay still when macOS Reduce Motion is on.
+
 By default, the menu bar tracks the most-used available window among the selected providers. **Settings → Display & usage → Menu bar tracks** lets you choose a particular five-hour, weekly, or model-specific window instead. Each provider's large percentage shows its most-used window, unless you track a specific one from that provider.
 
 [Verified Claude Ultra accounts no longer have a five-hour limit](https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan). If you previously chose Claude's five-hour window for the menu bar and Claude stops reporting it, Delta-V shows the available **Weekly** reading instead, in both the menu bar and the large Claude percentage. Settings explains the fallback and keeps your saved choice in case the five-hour window returns. A reported but expired or unavailable five-hour reading stays unavailable. Compact-view window choices remain separate; choose **Automatic** or **Weekly** if a selected window disappears.
@@ -342,6 +344,9 @@ For manual configuration, quit Delta-V, edit `~/.config/delta-v/config.toml`, th
 | `codex_windows` | `[]` | Up to two Codex limit IDs for the compact rows, in display order; empty means Automatic |
 | `percentage_mode` | `"remaining"` | `"remaining"` or `"used"`, for the menu bar, provider summaries, and usage bars |
 | `show_pacing` | `true` | Show pace rows and reference marks in the full panel and mini view |
+| `claude_mascot` | `false` | Show Clawd in the full usage panel |
+| `codex_mascot` | `false` | Show the Codex pet in the full usage panel |
+| `mascot_animation` | `true` | Animate visible mascots when macOS Reduce Motion is off |
 | `threshold` | `20` | Low allowance threshold, from 0 to 100% remaining; the saved value controls highlighting and enabled notifications watch for crossings below it |
 | `refresh_seconds` | `60` | Base refresh interval, from 30 to 900 seconds; routine Claude checks have a 300-second minimum. Idle and error backoff still apply |
 | `theme` | `"system"` | `"system"`, `"light"`, or `"dark"` |
@@ -365,8 +370,7 @@ Launch at login is managed by macOS, so it has no on/off value in this file. `la
 - [x] Organize settings in a dedicated window.
 - [x] Offer optional low-allowance notifications.
 - [x] Offer optional alerts when usage stays above pace.
-
-Later UI candidate, not yet implemented: optional Claude and Codex mascots inspired by [Clawd Usage WinWidget](https://github.com/Enhed/clawd-usage-winwidget) and [Claudy Usage Mac](https://github.com/juliobianco/claudy-usage-mac), with separate toggles that start off. Mascots would accompany the existing usage figures and reset times, with initial states based only on quota readings and their freshness. Keep a static option and respect reduced-motion preferences.
+- [x] Add optional Claude and Codex mascots to the usage panel, with idle and refill animations.
 
 Follow-on candidates include mini-view polish. Live session activity would need its own validated data source before the UI could show whether an agent is working or waiting.
 
@@ -380,4 +384,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and how t
 
 ## License
 
-[MIT](LICENSE)
+Delta-V's code uses the [MIT License](LICENSE). Clawd artwork comes from Anthropic and the Codex pet artwork comes from OpenAI. See [mascot artwork sources](src/mascots/official/SOURCES.md).

@@ -14,6 +14,7 @@ fn snapshot(at: i64, used: f64) -> ProviderSnapshot {
         warnings: vec![],
         history_account: Some(ACCOUNT.into()),
         history_generation: None,
+        claude_credential: None,
         limits: vec![Limit {
             id: "weekly".into(),
             label: "Weekly".into(),

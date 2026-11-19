@@ -173,6 +173,25 @@
   line-height: 1.5;
 }
 
+.mascot-choices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0 14px;
+}
+
+.mascot-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+}
+
+.mascot-choices input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .settings-window .setting-row select {
   flex-shrink: 0;
   width: 44%;
